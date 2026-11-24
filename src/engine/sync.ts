@@ -11,6 +11,7 @@ import {
 	itemRepoPath,
 	PLUGIN_FILES,
 	PROFILE_FILE,
+	SETTINGS_KEY,
 	serializeProfile,
 	emptyProfile,
 	emptySettings,
@@ -21,7 +22,7 @@ import {
 	type ProfileFile,
 	type SharedSettings,
 } from "../core/model";
-import { restoreSecrets, SecretMatcher } from "../core/secrets";
+import { commonKeys, restoreSecrets, SecretMatcher } from "../core/secrets";
 import { joinPath, listRecursive, readTextIfExists, writeBytes, type Fs, type Host, type Http } from "../io";
 import type { GitHubClient, TreeWrite } from "../remote/github";
 import { BackupStore } from "./backup";
@@ -57,6 +58,9 @@ export interface Failure {
 	key: string;
 	error: string;
 }
+
+/** Called before each change is prepared (downloads happen here): done so far, total, item key. */
+export type PullProgress = (done: number, total: number, key: string) => void;
 
 export interface PullResult {
 	base: Base;
@@ -105,8 +109,17 @@ export class SyncEngine {
 	/**
 	 * The profile is read first: its shared exclusions and secret keys apply even
 	 * before this vault has pulled them. Otherwise a vault that has not pulled a new
-	 * secret key yet would push that secret in clear text.
+	 * secret key yet would push that secret in clear text. For the same reason a key
+	 * counts as not secret only when both this vault and the profile say so.
 	 */
+	/**
+	 * Secret rules for scanning this vault against a profile with `remote` settings,
+	 * when the vault's own shared settings are `local`.
+	 */
+	private matcher(local: SharedSettings, remote: SharedSettings): SecretMatcher {
+		return new SecretMatcher([...local.secretKeys, ...remote.secretKeys], commonKeys(local.plainKeys, remote.plainKeys));
+	}
+
 	async compare(base: Base): Promise<SyncStatus> {
 		const remote = await this.reader.read(this.rules());
 		const remoteSettings = remote.profile.settings;
@@ -116,7 +129,7 @@ export class SyncEngine {
 			configDir: this.cfg.configDir,
 			selfId: this.cfg.selfId,
 			exclude: rules,
-			secrets: new SecretMatcher([...this.cfg.shared.secretKeys, ...remoteSettings.secretKeys]),
+			secrets: this.matcher(this.cfg.shared, remoteSettings),
 			shared: this.cfg.shared,
 		});
 		return { local, remote, result: classify(local.snapshot, remote.snapshot, base) };
@@ -162,7 +175,7 @@ export class SyncEngine {
 		return this.deps.host.isPluginLoaded(id) ? [id] : [];
 	}
 
-	private async preparePull(status: SyncStatus, change: Change): Promise<PreparedPull> {
+	private async preparePull(status: SyncStatus, change: Change, secrets: SecretMatcher): Promise<PreparedPull> {
 		const { fs } = this.deps;
 		const remote = change.remote;
 		const { kind, name } = (remote ?? change.local)!;
@@ -180,7 +193,7 @@ export class SyncEngine {
 				const incoming = tryParseJson(text);
 				if (incoming !== undefined) {
 					const current = await readTextIfExists(fs, path);
-					text = canonicalJson(restoreSecrets(incoming, current === null ? undefined : tryParseJson(current)));
+					text = canonicalJson(restoreSecrets(incoming, current === null ? undefined : tryParseJson(current), secrets));
 				}
 			}
 			if (kind === "plugin-data" && !(await fs.exists(this.pluginFolder(status, name)))) {
@@ -259,13 +272,19 @@ export class SyncEngine {
 	 * Every change is prepared (downloads included) before anything is written;
 	 * a change that cannot be prepared is reported and left out.
 	 */
-	async pull(status: SyncStatus, changes: Change[], base: Base): Promise<PullResult> {
+	async pull(status: SyncStatus, changes: Change[], base: Base, onProgress?: PullProgress): Promise<PullResult> {
 		const { fs, host } = this.deps;
 		const result: PullResult = { base: { ...base }, shared: null, applied: [], failed: [], warnings: [], backupDir: null };
 		const ready: PreparedPull[] = [];
-		for (const change of changes) {
+		// Restored secrets must scan back to the profile's text under the rules the
+		// next comparison uses; pulling settings:sync makes the profile's settings ours.
+		const remoteSettings = status.remote.profile.settings;
+		const takesSettings = changes.some((c) => c.key === SETTINGS_KEY && c.remote);
+		const secrets = this.matcher(takesSettings ? remoteSettings : this.cfg.shared, remoteSettings);
+		for (const [i, change] of changes.entries()) {
+			onProgress?.(i, changes.length, change.key);
 			try {
-				ready.push(await this.preparePull(status, change));
+				ready.push(await this.preparePull(status, change, secrets));
 			} catch (e) {
 				result.failed.push({ key: change.key, error: e instanceof Error ? e.message : String(e) });
 			}

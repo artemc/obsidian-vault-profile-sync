@@ -9,9 +9,10 @@ import type { Base, Change } from "./core/classify";
 import { emptySettings, normalizeSettings, type SharedSettings } from "./core/model";
 import { BackupStore } from "./engine/backup";
 import { Catalog } from "./engine/catalog";
-import { SyncEngine, type PullResult, type PushResult, type SyncStatus } from "./engine/sync";
+import { SyncEngine, type PullProgress, type PullResult, type PushResult, type SyncStatus } from "./engine/sync";
 import { joinPath } from "./io";
-import { adapterFs, appHost, obsidianHttp, reloadApp } from "./obsidian-host";
+import { MACHINE_TOKEN_KEY, TokenStore } from "./core/token";
+import { adapterFs, appHost, appStorage, obsidianHttp, reloadApp, systemCipher } from "./obsidian-host";
 import { GitHubClient, parseRepo } from "./remote/github";
 import { t } from "./ui/i18n";
 import { ProfileSettingTab } from "./ui/SettingsTab";
@@ -55,12 +56,21 @@ export default class VaultProfileSync extends Plugin {
 
 	async onload(): Promise<void> {
 		await this.loadPluginData();
+		try {
+			this.tokens().migrate();
+		} catch (e) {
+			console.warn("[vault-profile-sync] could not move the token to the shared copy", e);
+		}
 		this.addSettingTab(new ProfileSettingTab(this.app, this));
 		this.addRibbonIcon("folder-sync", t("openProfile"), () => this.openModal());
 		this.statusEl = this.addStatusBarItem();
 		this.statusEl.addClass("mod-clickable", "vps-status");
 		this.statusEl.onClickEvent(() => this.openModal());
 		this.setStatusText();
+		// The shared token was set or removed in another vault's window.
+		this.registerDomEvent(window, "storage", (e: StorageEvent) => {
+			if (e.key === MACHINE_TOKEN_KEY) this.setStatusText();
+		});
 
 		this.addCommand({ id: "open", name: t("openProfile"), callback: () => this.openModal() });
 		this.addCommand({ id: "undo-last-pull", name: t("commandUndo"), callback: () => void this.undoLastPull() });
@@ -108,12 +118,20 @@ export default class VaultProfileSync extends Plugin {
 		}
 	}
 
+	tokens(): TokenStore {
+		const secrets = this.app.secretStorage;
+		return new TokenStore(appStorage, systemCipher(), {
+			get: () => secrets.getSecret(TOKEN_SECRET),
+			set: (v) => secrets.setSecret(TOKEN_SECRET, v),
+		});
+	}
+
 	getToken(): string | null {
-		return this.app.secretStorage.getSecret(TOKEN_SECRET);
+		return this.tokens().get();
 	}
 
 	setToken(value: string): void {
-		this.app.secretStorage.setSecret(TOKEN_SECRET, value.trim());
+		this.tokens().set(value);
 	}
 
 	isConfigured(): boolean {
@@ -192,9 +210,9 @@ export default class VaultProfileSync extends Plugin {
 	}
 
 	/** Apply the profile's side of `changes`. The caller reloads Obsidian afterwards. */
-	async pull(status: SyncStatus, changes: Change[]): Promise<PullResult> {
+	async pull(status: SyncStatus, changes: Change[], onProgress?: PullProgress): Promise<PullResult> {
 		return this.exclusive(async () => {
-			const r = await this.engine().pull(status, changes, status.result.settledBase);
+			const r = await this.engine().pull(status, changes, status.result.settledBase, onProgress);
 			if (r.shared) this.data.shared = r.shared;
 			await this.storeBase(r.base);
 			this.lastStatus = null;
@@ -212,7 +230,12 @@ export default class VaultProfileSync extends Plugin {
 	}
 
 	/** Push first, then pull on top of the pushed base, so neither step undoes the other. */
-	async syncAll(status: SyncStatus, out: Change[], incoming: Change[]): Promise<{ push: PushResult | null; pull: PullResult | null }> {
+	async syncAll(
+		status: SyncStatus,
+		out: Change[],
+		incoming: Change[],
+		onProgress?: PullProgress,
+	): Promise<{ push: PushResult | null; pull: PullResult | null }> {
 		return this.exclusive(async () => {
 			let base = status.result.settledBase;
 			let push: PushResult | null = null;
@@ -223,7 +246,7 @@ export default class VaultProfileSync extends Plugin {
 				await this.storeBase(base);
 			}
 			if (incoming.length > 0) {
-				pull = await this.engine().pull(status, incoming, base);
+				pull = await this.engine().pull(status, incoming, base, onProgress);
 				if (pull.shared) this.data.shared = pull.shared;
 				await this.storeBase(pull.base);
 			}

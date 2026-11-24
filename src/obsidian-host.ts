@@ -5,6 +5,7 @@
  */
 
 import { requestUrl, type App, type DataAdapter } from "obsidian";
+import type { Cipher, KeyValue } from "./core/token";
 import type { Fs, Host, Http } from "./io";
 
 interface PluginManager {
@@ -59,6 +60,35 @@ export function appHost(app: App): Host {
 			const pm = internals(app).plugins;
 			if (typeof pm?.disablePlugin === "function") await pm.disablePlugin(id);
 		},
+	};
+}
+
+/** App-wide storage: window.localStorage is shared by every vault of this Obsidian. */
+export const appStorage: KeyValue = {
+	get: (k) => window.localStorage.getItem(k),
+	set: (k, v) => (v === null ? window.localStorage.removeItem(k) : window.localStorage.setItem(k, v)),
+};
+
+interface SafeStorage {
+	isEncryptionAvailable(): boolean;
+	encryptString(plain: string): { toString(encoding: string): string };
+	decryptString(data: unknown): string;
+}
+
+/**
+ * Electron's safeStorage, the system keychain Obsidian itself encrypts secrets
+ * with. Internal: null when it is missing (mobile, a future Obsidian), and the
+ * token then stays in the vault's secret storage.
+ */
+export function systemCipher(): Cipher | null {
+	const w = window as unknown as { electron?: { remote?: { safeStorage?: SafeStorage } } };
+	const ss = w.electron?.remote?.safeStorage;
+	const B = (globalThis as unknown as { Buffer?: { from(data: string, encoding: string): unknown } }).Buffer;
+	if (!ss || typeof ss.encryptString !== "function" || typeof ss.decryptString !== "function" || !B) return null;
+	return {
+		available: () => ss.isEncryptionAvailable(),
+		encrypt: (plain) => ss.encryptString(plain).toString("base64"),
+		decrypt: (data) => ss.decryptString(B.from(data, "base64")),
 	};
 }
 

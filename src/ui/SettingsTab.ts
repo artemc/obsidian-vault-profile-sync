@@ -59,7 +59,7 @@ export class ProfileSettingTab extends PluginSettingTab {
 			);
 		const locationNote = containerEl.createDiv({ cls: "vps-muted vps-note" });
 
-		const tokenSetting = new Setting(containerEl).setName(t("sToken")).setDesc(t("sTokenDesc"));
+		const tokenSetting = new Setting(containerEl).setName(t("sToken")).setDesc(t(plugin.tokens().shared() ? "sTokenDescShared" : "sTokenDescVault"));
 		tokenSetting.descEl.createEl("br");
 		tokenSetting.descEl.createEl("a", { text: t("sTokenCreate"), href: "https://github.com/settings/personal-access-tokens/new" });
 		tokenSetting.addText((c) => {
@@ -69,6 +69,16 @@ export class ProfileSettingTab extends PluginSettingTab {
 				plugin.setStatusText();
 			});
 		});
+		tokenSetting.addExtraButton((b) =>
+			b
+				.setIcon("trash")
+				.setTooltip(t("sTokenForget"))
+				.onClick(() => {
+					plugin.tokens().forget();
+					plugin.setStatusText();
+					this.display();
+				}),
+		);
 
 		const testResult = containerEl.createDiv({ cls: "vps-note" });
 		new Setting(containerEl).addButton((b) =>
@@ -130,6 +140,10 @@ export class ProfileSettingTab extends PluginSettingTab {
 		});
 		this.patterns(t("sSecretKeys"), t("sSecretKeysDesc"), data.shared.secretKeys, async (v) => {
 			data.shared = { ...data.shared, secretKeys: v };
+			await plugin.saveSettings();
+		});
+		this.patterns(t("sPlainKeys"), t("sPlainKeysDesc"), data.shared.plainKeys, async (v) => {
+			data.shared = { ...data.shared, plainKeys: v };
 			await plugin.saveSettings();
 		});
 

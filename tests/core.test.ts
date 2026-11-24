@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { canonicalJson, gitBlobSha } from "../src/core/canonical";
+import { canonicalJson, gitBlobSha, type Json } from "../src/core/canonical";
 import { classify, classifyOne } from "../src/core/classify";
 import { itemDiff, jsonDiff } from "../src/core/diff";
 import { ExcludeRules, parsePatternList } from "../src/core/exclude";
-import { fileItem, parseProfile, repoPathToItem, itemRepoPath, type Snapshot } from "../src/core/model";
+import { emptySettings, fileItem, parseProfile, repoPathToItem, itemRepoPath, settingsText, type Snapshot } from "../src/core/model";
 import { asInstalledByObsidian } from "../src/engine/catalog";
 import { redactSecrets, restoreSecrets, SECRET_MARKER, SecretMatcher } from "../src/core/secrets";
 
@@ -62,16 +62,43 @@ describe("secrets", () => {
 		expect(redactSecrets({ maxTokens: 4096 }, m)).toEqual({ maxTokens: 4096 });
 	});
 
+	it("restored values scan back to the profile's text", () => {
+		const profile = { proxy: "socks5://a:pw@host", list: ["ghp_" + "x".repeat(36)], token: "t" };
+		const red = redactSecrets(profile, m);
+		const locals: (Json | undefined)[] = [undefined, { proxy: "socks5://localhost:1080", list: [""], token: "" }, { proxy: "socks5://b:pw2@h", list: ["ghp_" + "y".repeat(36)] }];
+		for (const local of locals) {
+			const restored = restoreSecrets(red, local, m);
+			expect(redactSecrets(restored, m), JSON.stringify(local)).toEqual(red);
+		}
+		// a local credential stays; a harmless local value cannot stand in for one
+		expect(restoreSecrets(red, { proxy: "socks5://b:pw2@h" }, m)).toMatchObject({ proxy: "socks5://b:pw2@h", token: "" });
+		expect(restoreSecrets(red, { proxy: "socks5://localhost:1080" }, m)).toMatchObject({ proxy: SECRET_MARKER });
+	});
+
+	it("plain keys turn off the name rule but not the value rule", () => {
+		const p = new SecretMatcher(["myField"], ["plugin_tokens", "myField"]);
+		expect(p.isSecretKey("pluginTokens")).toBe(false);
+		expect(p.isSecretKey("token")).toBe(true);
+		expect(p.isSecretKey("myField")).toBe(true); // an explicit secret key wins
+		expect(redactSecrets({ pluginTokens: "persist:surfing-vault-${appId}" }, p)).toEqual({ pluginTokens: "persist:surfing-vault-${appId}" });
+		expect(redactSecrets({ pluginTokens: "socks5://u:pw@host" }, p)).toEqual({ pluginTokens: SECRET_MARKER });
+	});
+
+	it("settings without plain keys keep the hash they had before plain keys existed", () => {
+		expect(settingsText(emptySettings())).toBe(canonicalJson({ exclude: [], secretKeys: [] }));
+		expect(JSON.parse(settingsText({ ...emptySettings(), plainKeys: ["x"] })).plainKeys).toEqual(["x"]);
+	});
+
 	it("redacts strings at any depth and restores local values", () => {
 		const data = { apiKey: "sk-1", nested: { list: [{ token: "t" }], name: "n" }, showPassword: true };
 		const red = redactSecrets(data, m);
 		expect(red).toEqual({ apiKey: SECRET_MARKER, nested: { list: [{ token: SECRET_MARKER }], name: "n" }, showPassword: true });
-		expect(restoreSecrets(red, { apiKey: "mine", nested: { list: [{ token: "t2" }] } })).toEqual({
+		expect(restoreSecrets(red, { apiKey: "mine", nested: { list: [{ token: "t2" }] } }, m)).toEqual({
 			apiKey: "mine",
 			nested: { list: [{ token: "t2" }], name: "n" },
 			showPassword: true,
 		});
-		expect(restoreSecrets(red, undefined)).toMatchObject({ apiKey: "" });
+		expect(restoreSecrets(red, undefined, m)).toMatchObject({ apiKey: "" });
 	});
 
 	it("redacts credentials by value shape whatever the key is", () => {
@@ -92,7 +119,7 @@ describe("secrets", () => {
 	});
 
 	it("keeps a restored empty secret in sync", () => {
-		const restored = restoreSecrets({ apiKey: SECRET_MARKER }, undefined);
+		const restored = restoreSecrets({ apiKey: SECRET_MARKER }, undefined, m);
 		expect(redactSecrets(restored, m)).toEqual({ apiKey: SECRET_MARKER });
 	});
 });

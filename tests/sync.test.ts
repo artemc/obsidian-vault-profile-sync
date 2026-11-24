@@ -178,6 +178,18 @@ describe("first push into an empty repository", () => {
 });
 
 describe("a new vault pulls the whole profile", () => {
+	it("reports progress before preparing each change", async () => {
+		await a.push();
+		const b = new Vault("B", gh);
+		const s = await b.status();
+		const changes = [...s.result.incoming, ...s.result.conflicts];
+		const calls: [number, number, string][] = [];
+		await b.engine().pull(s, changes, s.result.settledBase, (done, total, key) => calls.push([done, total, key]));
+		expect(calls.map((c) => c[0])).toEqual(changes.map((_, i) => i));
+		expect(calls.every((c) => c[1] === changes.length)).toBe(true);
+		expect(calls.map((c) => c[2])).toEqual(changes.map((c) => c.key));
+	});
+
 	it("installs, enables and configures plugins, and ends in sync", async () => {
 		await a.push();
 		const b = new Vault("B", gh);
@@ -312,13 +324,13 @@ describe("exclusions", () => {
 	});
 
 	it("shared exclusions travel with the profile", async () => {
-		a.shared = { exclude: ["config:graph.json"], secretKeys: ["templates_folder"] };
+		a.shared = { exclude: ["config:graph.json"], secretKeys: ["templates_folder"], plainKeys: [] };
 		a.fs.put(`${CFG}/graph.json`, "{}");
 		await a.push();
 		expect(gh.snapshot().has("config/graph.json")).toBe(false);
 		expect(JSON.parse(gh.snapshot().get("plugins/templater/data.json")!).templates_folder).toBe(SECRET_MARKER);
 		const b = await freshVault("B");
-		expect(b.shared).toEqual({ exclude: ["config:graph.json"], secretKeys: ["templates_folder"] });
+		expect(b.shared).toEqual({ exclude: ["config:graph.json"], secretKeys: ["templates_folder"], plainKeys: [] });
 	});
 });
 
@@ -340,11 +352,54 @@ describe("regressions", () => {
 		expect((await b.counts()).incoming).toEqual(["snippet:wide"]);
 	});
 
+	it("a secret recognised by its value does not come back as an outgoing change", async () => {
+		// The key name is harmless, the value is a URL with a password.
+		a.installPlugin("proxy", "1.0.0", { socks: "socks5://me:pw@host", other: 1 });
+		gh.release("proxy", "1.0.0");
+		await a.push();
+		const b = await freshVault("B");
+		expect(await b.counts()).toEqual(inSync);
+		const c = new Vault("C", gh);
+		c.installPlugin("proxy", "1.0.0", { socks: "socks5://localhost:1080", other: 2 });
+		await c.pull(true);
+		expect(await c.counts()).toEqual(inSync);
+		// Nothing B or C could push now would overwrite A's password with an empty value.
+		a.fs.put(`${CFG}/plugins/proxy/data.json`, JSON.stringify({ socks: "socks5://me:pw@host", other: 3 }));
+		await a.push();
+		await b.pull();
+		expect(a.fs.json(`${CFG}/plugins/proxy/data.json`)).toMatchObject({ socks: "socks5://me:pw@host" });
+		expect(await b.counts()).toEqual(inSync);
+	});
+
+	it("a not-secret key is synced only once both the vault and the profile list it", async () => {
+		a.installPlugin("proxy", "1.0.0", { pluginTokens: "persist:surfing", socks: "socks5://me:pw@host" });
+		gh.release("proxy", "1.0.0");
+		await a.push();
+		const b = await freshVault("B");
+		expect(gh.snapshot().get("plugins/proxy/data.json")).not.toContain("persist:surfing");
+
+		a.shared = { ...a.shared, plainKeys: ["pluginTokens"] };
+		// The profile does not list the key yet, so the value still stays home.
+		expect((await a.counts()).outgoing).toEqual(["settings:sync"]);
+		await a.push();
+		expect((await a.counts()).outgoing).toEqual(["plugin-data:proxy"]);
+		await a.push();
+		const pushed = gh.snapshot().get("plugins/proxy/data.json")!;
+		expect(pushed).toContain("persist:surfing");
+		expect(pushed).not.toContain("me:pw");
+
+		// B has not pulled the new settings: it sees incoming changes, not conflicts.
+		expect(await b.counts()).toEqual({ incoming: ["plugin-data:proxy", "settings:sync"], outgoing: [], conflicts: [] });
+		await b.pull();
+		expect(b.fs.json(`${CFG}/plugins/proxy/data.json`)).toMatchObject({ pluginTokens: "persist:surfing" });
+		expect(await b.counts()).toEqual(inSync);
+	});
+
 	it("a vault that has not pulled a new secret key does not push that secret", async () => {
 		await a.push();
 		const b = await freshVault("B");
 		b.fs.put(`${CFG}/plugins/dataview/data.json`, JSON.stringify({ refreshInterval: 2500, enableDataviewJs: true, licenseCode: "B-PRIVATE" }));
-		a.shared = { exclude: [], secretKeys: ["licenseCode"] };
+		a.shared = { exclude: [], secretKeys: ["licenseCode"], plainKeys: [] };
 		await a.push();
 		// B pushes its plugin settings without having pulled the new shared settings
 		await b.push((c) => c.key === "plugin-data:dataview");
@@ -353,7 +408,7 @@ describe("regressions", () => {
 	});
 
 	it("shared exclusions apply before the vault has pulled them", async () => {
-		a.shared = { exclude: ["config:graph.json"], secretKeys: [] };
+		a.shared = { exclude: ["config:graph.json"], secretKeys: [], plainKeys: [] };
 		await a.push();
 		const b = new Vault("B", gh);
 		b.fs.put(`${CFG}/graph.json`, '{"scale": 2}');

@@ -223,7 +223,13 @@ export class SyncModal extends Modal {
 				await this.load();
 				return;
 			}
-			const r = kind === "pull" ? { push: null, pull: await this.plugin.pull(status, pull) } : await this.plugin.syncAll(status, push, pull);
+			const progress = (done: number, total: number, key: string) => {
+				this.message(t("pullProgress", { done: done + 1, total, item: itemLabel(key) }));
+			};
+			const r =
+				kind === "pull"
+					? { push: null, pull: await this.plugin.pull(status, pull, progress) }
+					: await this.plugin.syncAll(status, push, pull, progress);
 			if (r.push) new Notice(t("pushed", { n: r.push.pushed.length }));
 			const p = r.pull;
 			if (!p) {

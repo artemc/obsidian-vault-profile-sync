@@ -37,17 +37,34 @@ function normalizeKey(key: string): string {
 	return key.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
+/** Keys of `a` that `b` also lists, compared the way the matcher compares them. */
+export function commonKeys(a: string[], b: string[]): string[] {
+	const other = keySet(b);
+	return a.filter((k) => other.has(normalizeKey(k)));
+}
+
+function keySet(keys: string[]): Set<string> {
+	return new Set(keys.map(normalizeKey).filter((k) => k.length > 0));
+}
+
 export class SecretMatcher {
 	private readonly extra: Set<string>;
+	private readonly plain: Set<string>;
 
-	constructor(extraKeys: string[] = []) {
-		this.extra = new Set(extraKeys.map(normalizeKey).filter((k) => k.length > 0));
+	/**
+	 * `plainKeys` turn off the key-name rule for those names. Values shaped like
+	 * credentials (see SECRET_VALUES) are removed whatever the key is called.
+	 */
+	constructor(extraKeys: string[] = [], plainKeys: string[] = []) {
+		this.extra = keySet(extraKeys);
+		this.plain = keySet(plainKeys);
 	}
 
 	isSecretKey(key: string): boolean {
 		const k = normalizeKey(key);
 		if (k.length === 0) return false;
 		if (this.extra.has(k)) return true;
+		if (this.plain.has(k)) return false;
 		const singular = k.endsWith("s") ? k.slice(0, -1) : k;
 		return BUILTIN_SUFFIXES.some((s) => k.endsWith(s) || singular.endsWith(s));
 	}
@@ -69,18 +86,34 @@ export function redactSecrets(value: Json, matcher: SecretMatcher): Json {
 
 /**
  * Replace markers in incoming with the values found at the same place in local.
- * A marker with no local string value becomes an empty string.
+ *
+ * The result must scan back to incoming (`redactSecrets(restoreSecrets(x)) == x`),
+ * otherwise the pulled item shows up as an outgoing change and the next push
+ * overwrites the profile's secret. So a marker becomes:
+ * - the local value, if the matcher will hide it again (secret key name or
+ *   credential-shaped value);
+ * - an empty string, if there is no such value and the key name is secret;
+ * - otherwise the marker itself: the secret was recognised by its shape, and
+ *   neither an empty string nor a harmless local value would be hidden again.
  */
-export function restoreSecrets(incoming: Json, local: Json | undefined): Json {
-	if (incoming === SECRET_MARKER) return typeof local === "string" ? local : "";
+export function restoreSecrets(incoming: Json, local: Json | undefined, matcher: SecretMatcher): Json {
+	return restore(incoming, local, matcher, null);
+}
+
+function restore(incoming: Json, local: Json | undefined, matcher: SecretMatcher, key: string | null): Json {
+	if (incoming === SECRET_MARKER) {
+		const byName = key !== null && matcher.isSecretKey(key);
+		if (typeof local === "string" && (byName || isSecretValue(local))) return local;
+		return byName ? "" : SECRET_MARKER;
+	}
 	if (Array.isArray(incoming)) {
 		const localArr = Array.isArray(local) ? local : [];
-		return incoming.map((v, i) => restoreSecrets(v, localArr[i]));
+		return incoming.map((v, i) => restore(v, localArr[i], matcher, null));
 	}
 	if (incoming !== null && typeof incoming === "object") {
 		const localObj = local !== null && typeof local === "object" && !Array.isArray(local) ? local : {};
 		const out: { [key: string]: Json } = {};
-		for (const [key, v] of Object.entries(incoming)) out[key] = restoreSecrets(v, localObj[key]);
+		for (const [k, v] of Object.entries(incoming)) out[k] = restore(v, localObj[k], matcher, k);
 		return out;
 	}
 	return incoming;

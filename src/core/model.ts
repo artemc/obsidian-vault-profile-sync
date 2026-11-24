@@ -33,6 +33,11 @@ export interface SharedSettings {
 	exclude: string[];
 	/** Extra JSON key names whose string values are treated as secrets. */
 	secretKeys: string[];
+	/**
+	 * Key names that look like secrets but are not (for example a list of session
+	 * names called `pluginTokens`). Values shaped like credentials are still removed.
+	 */
+	plainKeys: string[];
 }
 
 export interface ProfileFile {
@@ -111,7 +116,7 @@ export const PLUGIN_FILES = ["manifest.json", "main.js", "styles.css"];
 export const THEME_FILES = ["manifest.json", "theme.css"];
 
 export function emptySettings(): SharedSettings {
-	return { exclude: [], secretKeys: [] };
+	return { exclude: [], secretKeys: [], plainKeys: [] };
 }
 
 export function emptyProfile(): ProfileFile {
@@ -124,7 +129,7 @@ function stringList(value: unknown): string[] {
 
 export function normalizeSettings(value: unknown): SharedSettings {
 	const v = (value ?? {}) as Record<string, unknown>;
-	return { exclude: stringList(v.exclude), secretKeys: stringList(v.secretKeys) };
+	return { exclude: stringList(v.exclude), secretKeys: stringList(v.secretKeys), plainKeys: stringList(v.plainKeys) };
 }
 
 export function parseProfile(text: string): ProfileFile {
@@ -168,8 +173,9 @@ export function themeEntryText(e: { version: string }): string {
 	return canonicalJson({ version: e.version });
 }
 
+/** plainKeys is written only when set, so profiles made before it existed keep their hash. */
 export function settingsText(s: SharedSettings): string {
-	return canonicalJson({ exclude: s.exclude, secretKeys: s.secretKeys });
+	return canonicalJson(s.plainKeys.length > 0 ? { exclude: s.exclude, plainKeys: s.plainKeys, secretKeys: s.secretKeys } : { exclude: s.exclude, secretKeys: s.secretKeys });
 }
 
 export async function pluginItem(id: string, entry: PluginEntry): Promise<SnapItem> {

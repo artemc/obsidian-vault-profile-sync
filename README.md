@@ -34,7 +34,9 @@ are tired of copying `.obsidian` around.
   `password`, `apiKey`, `clientSecret`, their plurals, ...) and values that look like
   credentials whatever the key (URLs with a password such as `socks5://user:pass@host`,
   `ghp_…`, `github_pat_…`, `sk-…` tokens) are replaced with `<vps:secret>` before
-  pushing. On pull each vault keeps its own value.
+  pushing. On pull each vault keeps its own value. A field that only looks like a
+  secret (say, a list of session names called `pluginTokens`) can be listed under
+  *Fields that are not secret*; values shaped like credentials are removed anyway.
 - **Every pull can be undone.** Before a pull the files it touches are backed up (the
   last 5 are kept). *Undo last pull* restores them.
 - **Nothing happens by itself.** When the vault opens (and every 30 minutes by default)
@@ -50,7 +52,7 @@ are tired of copying `.obsidian` around.
 | Obsidian settings (`app.json`, `appearance.json`, `hotkeys.json`, `core-plugins.json`, core plugin settings, ...) | `config/<file>.json` |
 | CSS snippets | `snippets/<name>.css` |
 | Themes: name and version | `profile.json` |
-| Shared sync settings (exclusions, extra secret keys) | `profile.json` |
+| Shared sync settings (exclusions, extra secret keys, fields that are not secret) | `profile.json` |
 
 Never synced: `workspace.json`, `workspace-mobile.json`, `workspaces.json`,
 `bookmarks.json` (they describe one vault), and this plugin itself.
@@ -74,11 +76,18 @@ history of the repository is a readable log of who changed what.
 5. In the vault whose setup you want to share, open the profile window (ribbon icon,
    status bar or the command *Open settings profile*) and press **Push**.
 
-The repository, branch and folder are remembered on this computer and prefilled in the
-next vault. The token lives in Obsidian's secret storage, which Obsidian keeps per vault: paste
-it once in each new vault. Then open the profile window and press **Take
-everything from the profile**. Obsidian reloads, and the vault has the same plugins,
-settings, hotkeys and snippets.
+The repository, branch, folder and token are entered once per computer: every next
+vault picks them up. The token is encrypted with the system keychain (Keychain on
+macOS, the credential store on Windows, the Secret Service keyring on Linux), the
+same way Obsidian protects its own secrets, and is not stored in any vault. Where no
+keychain is available, the token goes to the vault's own secret storage instead, and
+has to be pasted once in each vault. The trash button next to the token field removes
+it from this computer.
+
+In a new vault, install the plugin, then open the profile window and press **Take
+everything from the profile**. The window shows each item as it is downloaded (a
+full profile of 15-20 plugins takes about a minute), then Obsidian reloads, and the
+vault has the same plugins, settings, hotkeys and snippets.
 
 ## Everyday use
 
@@ -105,7 +114,10 @@ Patterns, one per line:
 - a bare name matches every kind; `*` matches anything.
 
 *This vault only* exclusions keep a plugin local: it is neither pushed nor removed by a
-pull. *Shared* exclusions and extra secret keys travel with the profile to every vault.
+pull. *Shared* exclusions, extra secret keys and fields that are not secret travel with
+the profile to every vault. A field counts as not secret only once the list is in the
+profile, so adding one takes two pushes: the list first, then the settings that now
+include the field's value.
 
 ### Several profiles
 
