@@ -85,6 +85,9 @@ export class GitHubClient {
 				Accept: "application/vnd.github+json",
 				Authorization: `Bearer ${this.token}`,
 				"X-GitHub-Api-Version": "2022-11-28",
+				// requestUrl in Obsidian caches GET responses for GitHub's max-age=60; a
+				// stale branch head right after a push makes the whole profile look removed.
+				"Cache-Control": "no-cache",
 			},
 			contentType: body === undefined ? undefined : "application/json",
 			body: body === undefined ? undefined : JSON.stringify(body),

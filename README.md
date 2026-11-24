@@ -75,8 +75,8 @@ history of the repository is a readable log of who changed what.
    status bar or the command *Open settings profile*) and press **Push**.
 
 The repository, branch and folder are remembered on this computer and prefilled in the
-next vault. The token lives in Obsidian's secret storage; if your Obsidian keeps it per
-vault, paste it once in each new vault. Then open the profile window and press **Take
+next vault. The token lives in Obsidian's secret storage, which Obsidian keeps per vault: paste
+it once in each new vault. Then open the profile window and press **Take
 everything from the profile**. Obsidian reloads, and the vault has the same plugins,
 settings, hotkeys and snippets.
 

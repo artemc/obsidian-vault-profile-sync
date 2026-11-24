@@ -6,6 +6,8 @@ import { BackupStore } from "../src/engine/backup";
 import { Catalog } from "../src/engine/catalog";
 import { SyncEngine, type SyncStatus } from "../src/engine/sync";
 import { GitHubClient, RemoteMovedError } from "../src/remote/github";
+import type { Http } from "../src/io";
+import { browserCache } from "./fakes/httpcache";
 import { FakeGitHub } from "./fakes/fakegithub";
 import { MemFs } from "./fakes/memfs";
 
@@ -19,6 +21,8 @@ class Vault {
 	localExclude: string[] = [];
 	loaded = new Set<string>();
 	disabled: string[] = [];
+	/** What the engine talks to; a test may wrap it, e.g. in an HTTP cache. */
+	http: Http;
 
 	constructor(
 		readonly name: string,
@@ -29,13 +33,14 @@ class Vault {
 		this.fs.put(`${CFG}/community-plugins.json`, "[]");
 		this.fs.put(`${CFG}/workspace.json`, '{"main": "vault specific"}');
 		this.fs.put(`${CFG}/plugins/vault-profile-sync/manifest.json`, '{"id":"vault-profile-sync","version":"0.1.0"}');
+		this.http = gh.http;
 	}
 
 	engine(): SyncEngine {
 		return new SyncEngine(
 			{
 				fs: this.fs,
-				http: this.gh.http,
+				http: this.http,
 				host: {
 					isPluginLoaded: (id) => this.loaded.has(id),
 					disablePlugin: async (id) => {
@@ -43,8 +48,8 @@ class Vault {
 						this.loaded.delete(id);
 					},
 				},
-				client: new GitHubClient(this.gh.http, this.gh.owner, this.gh.repo, "tok"),
-				catalog: new Catalog(this.gh.http),
+				client: new GitHubClient(this.http, this.gh.owner, this.gh.repo, "tok"),
+				catalog: new Catalog(this.http),
 			},
 			{
 				configDir: CFG,
@@ -318,6 +323,23 @@ describe("exclusions", () => {
 });
 
 describe("regressions", () => {
+	it("an HTTP cache in front of GitHub does not hide the latest commit", async () => {
+		// Obsidian's requestUrl keeps GET responses for GitHub's max-age=60. A stale
+		// branch head after a push makes every pushed item look removed in the profile.
+		a.http = browserCache(gh.http);
+		expect((await a.counts()).outgoing.length).toBeGreaterThan(0);
+		await a.push();
+		expect(await a.counts()).toEqual(inSync);
+
+		const b = new Vault("B", gh);
+		b.http = browserCache(gh.http);
+		expect((await b.counts()).incoming).toContain("plugin:dataview");
+		await b.pull(true);
+		a.fs.put(`${CFG}/snippets/wide.css`, ".x {}\n");
+		await a.push();
+		expect((await b.counts()).incoming).toEqual(["snippet:wide"]);
+	});
+
 	it("a vault that has not pulled a new secret key does not push that secret", async () => {
 		await a.push();
 		const b = await freshVault("B");
