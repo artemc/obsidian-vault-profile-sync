@@ -11,18 +11,27 @@ import type { Json } from "./canonical";
 
 export const SECRET_MARKER = "<vps:secret>";
 
-const BUILTIN_SUFFIXES = [
-	"token",
-	"secret",
-	"password",
-	"passwd",
-	"apikey",
-	"accesskey",
-	"privatekey",
-	"credential",
-	"credentials",
-	"clientsecret",
+/** Key names (lowercase, letters and digits only) that hold credentials; a plural "s" is allowed. */
+const BUILTIN_SUFFIXES = ["token", "secret", "password", "passwd", "apikey", "accesskey", "privatekey", "credential", "clientsecret"];
+
+/**
+ * Values that are credentials whatever their key is called: URLs with a password
+ * (`socks5://user:pass@host`) and tokens with well-known prefixes.
+ */
+const SECRET_VALUES = [
+	/^[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s@]+@/i,
+	/^(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}$/,
+	/^github_pat_[A-Za-z0-9_]{20,}$/,
+	/^glpat-[A-Za-z0-9_-]{20,}$/,
+	/^sk-[A-Za-z0-9_-]{20,}$/,
+	/^xox[abprs]-[A-Za-z0-9-]{10,}$/,
+	/^AKIA[0-9A-Z]{16}$/,
+	/^AIza[0-9A-Za-z_-]{30,}$/,
 ];
+
+export function isSecretValue(value: string): boolean {
+	return SECRET_VALUES.some((r) => r.test(value));
+}
 
 function normalizeKey(key: string): string {
 	return key.toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -39,17 +48,19 @@ export class SecretMatcher {
 		const k = normalizeKey(key);
 		if (k.length === 0) return false;
 		if (this.extra.has(k)) return true;
-		return BUILTIN_SUFFIXES.some((s) => k === s || k.endsWith(s));
+		const singular = k.endsWith("s") ? k.slice(0, -1) : k;
+		return BUILTIN_SUFFIXES.some((s) => k.endsWith(s) || singular.endsWith(s));
 	}
 }
 
-/** Return a copy of value with secret string values replaced by the marker. */
+/** Return a copy of value with secret string values (by key name or by shape) replaced by the marker. */
 export function redactSecrets(value: Json, matcher: SecretMatcher): Json {
-	if (Array.isArray(value)) return value.map((v) => redactSecrets(v, matcher));
+	if (Array.isArray(value)) return value.map((v) => (typeof v === "string" && isSecretValue(v) ? SECRET_MARKER : redactSecrets(v, matcher)));
 	if (value !== null && typeof value === "object") {
 		const out: { [key: string]: Json } = {};
 		for (const [key, v] of Object.entries(value)) {
-			out[key] = typeof v === "string" && matcher.isSecretKey(key) ? SECRET_MARKER : redactSecrets(v, matcher);
+			const secret = typeof v === "string" && v !== SECRET_MARKER && (matcher.isSecretKey(key) || isSecretValue(v));
+			out[key] = secret || v === SECRET_MARKER ? SECRET_MARKER : redactSecrets(v, matcher);
 		}
 		return out;
 	}

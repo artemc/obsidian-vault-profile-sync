@@ -4,6 +4,7 @@ import { classify, classifyOne } from "../src/core/classify";
 import { itemDiff, jsonDiff } from "../src/core/diff";
 import { ExcludeRules, parsePatternList } from "../src/core/exclude";
 import { fileItem, parseProfile, repoPathToItem, itemRepoPath, type Snapshot } from "../src/core/model";
+import { asInstalledByObsidian } from "../src/engine/catalog";
 import { redactSecrets, restoreSecrets, SECRET_MARKER, SecretMatcher } from "../src/core/secrets";
 
 describe("canonical", () => {
@@ -52,10 +53,13 @@ describe("classify", () => {
 describe("secrets", () => {
 	const m = new SecretMatcher(["myField"]);
 	it("matches credential-like key names only", () => {
-		for (const k of ["token", "githubToken", "api_key", "openAIApiKey", "password", "client-secret", "accessKey", "myField"]) {
+		for (const k of ["token", "githubToken", "api_key", "openAIApiKey", "password", "client-secret", "accessKey", "myField", "pluginTokens", "apiKeys", "passwords", "credentials"]) {
 			expect(m.isSecretKey(k), k).toBe(true);
 		}
-		for (const k of ["author", "maxTokens", "tokenLimit", "secretary", "keyboard", "path"]) expect(m.isSecretKey(k), k).toBe(false);
+		for (const k of ["author", "tokenLimit", "secretary", "keyboard", "path", "geminiApiKeyName"]) expect(m.isSecretKey(k), k).toBe(false);
+		// a plural name matches; only string values are redacted, so numeric limits survive
+		expect(m.isSecretKey("maxTokens")).toBe(true);
+		expect(redactSecrets({ maxTokens: 4096 }, m)).toEqual({ maxTokens: 4096 });
 	});
 
 	it("redacts strings at any depth and restores local values", () => {
@@ -68,6 +72,23 @@ describe("secrets", () => {
 			showPassword: true,
 		});
 		expect(restoreSecrets(red, undefined)).toMatchObject({ apiKey: "" });
+	});
+
+	it("redacts credentials by value shape whatever the key is", () => {
+		const data = {
+			socksProxy: "socks5://user:p4ss@10.0.0.1:1080",
+			plainProxy: "socks5://10.0.0.1:1080",
+			note: "github_pat_11ABCDEFG0123456789_abcdefghijklmnop",
+			list: ["sk-abcdefghijklmnopqrstuvwx", "plain"],
+			template: "a:b-c-${ver}",
+		};
+		expect(redactSecrets(data, m)).toEqual({
+			socksProxy: SECRET_MARKER,
+			plainProxy: "socks5://10.0.0.1:1080",
+			note: SECRET_MARKER,
+			list: [SECRET_MARKER, "plain"],
+			template: "a:b-c-${ver}",
+		});
 	});
 
 	it("keeps a restored empty secret in sync", () => {
@@ -123,5 +144,13 @@ describe("diff", () => {
 		const d = itemDiff(".a { color: red; }\n", ".a { color: blue; }\n");
 		expect(d.kind).toBe("text");
 		expect(d.rows.map((r) => r.type)).toEqual(["removed", "added"]);
+	});
+});
+
+describe("install like Obsidian", () => {
+	it("drops source maps and appends the nosourcemap marker once", () => {
+		expect(asInstalledByObsidian("a();\n")).toBe("a();\n\n/* nosourcemap */");
+		expect(asInstalledByObsidian("a();\n//# sourceMappingURL=data:application/json;base64,AAA=\n")).toBe("a();\n\n\n/* nosourcemap */");
+		expect(asInstalledByObsidian("a();\n\n/* nosourcemap */")).toBe("a();\n\n/* nosourcemap */");
 	});
 });

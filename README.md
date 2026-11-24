@@ -28,10 +28,12 @@ are tired of copying `.obsidian` around.
   plugin back, because for that vault the plugin is not an outgoing change.
 - **Plugin code is not stored.** The profile records each plugin's id, version and
   whether it is enabled. On pull the exact version is downloaded from the plugin's
-  GitHub release, the same files Obsidian installs. Plugins that are not in the
+  GitHub release and installed byte for byte the way Obsidian's own installer does it. Plugins that are not in the
   community catalog (BRAT betas, your own) are stored in the profile under `vendor/`.
 - **Secrets stay home.** String values of keys that look like credentials (`token`,
-  `password`, `apiKey`, `clientSecret`, ...) are replaced with `<vps:secret>` before
+  `password`, `apiKey`, `clientSecret`, their plurals, ...) and values that look like
+  credentials whatever the key (URLs with a password such as `socks5://user:pass@host`,
+  `ghp_…`, `github_pat_…`, `sk-…` tokens) are replaced with `<vps:secret>` before
   pushing. On pull each vault keeps its own value.
 - **Every pull can be undone.** Before a pull the files it touches are backed up (the
   last 5 are kept). *Undo last pull* restores them.

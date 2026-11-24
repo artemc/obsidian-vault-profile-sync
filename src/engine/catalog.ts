@@ -4,7 +4,7 @@
  * files Obsidian itself installs: manifest.json, main.js and optional styles.css.
  */
 
-import { tryParseJson, utf8Decode } from "../core/canonical";
+import { tryParseJson, utf8Decode, utf8Encode } from "../core/canonical";
 import type { Http } from "../io";
 
 const RELEASES = "https://raw.githubusercontent.com/obsidianmd/obsidian-releases/HEAD";
@@ -49,6 +49,17 @@ export class Catalog {
 	}
 }
 
+const NO_SOURCEMAP = "\n/* nosourcemap */";
+
+/**
+ * What Obsidian's own installer does to main.js: drop source map comments and append
+ * a "nosourcemap" marker. Applying it keeps our installs byte-identical to Obsidian's.
+ */
+export function asInstalledByObsidian(mainJs: string): string {
+	if (mainJs.endsWith(NO_SOURCEMAP)) return mainJs;
+	return mainJs.replace(/\/\/# sourceMappingURL=[^\r\n]*/g, "") + NO_SOURCEMAP;
+}
+
 function tagCandidates(version: string): string[] {
 	const bare = version.replace(/^v/i, "");
 	return [...new Set([version, bare, `v${bare}`])];
@@ -75,7 +86,7 @@ export async function downloadPlugin(http: Http, repo: string, version: string):
 		const manifest = await fetchBytes(http, `${base}/manifest.json`);
 		if (!manifest) continue;
 		const files: FileSet = new Map([
-			["main.js", main],
+			["main.js", utf8Encode(asInstalledByObsidian(utf8Decode(main)))],
 			["manifest.json", manifest],
 		]);
 		const styles = await fetchBytes(http, `${base}/styles.css`);

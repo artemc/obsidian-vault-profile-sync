@@ -60,7 +60,7 @@ class Vault {
 
 	installPlugin(id: string, version: string, data?: unknown, enabled = true): void {
 		this.fs.put(`${CFG}/plugins/${id}/manifest.json`, JSON.stringify({ id, name: id, version }));
-		this.fs.put(`${CFG}/plugins/${id}/main.js`, `// ${id} ${version}\n`);
+		this.fs.put(`${CFG}/plugins/${id}/main.js`, `// ${id} ${version}\n\n/* nosourcemap */`);
 		if (data !== undefined) this.fs.put(`${CFG}/plugins/${id}/data.json`, JSON.stringify(data));
 		const list = this.fs.json(`${CFG}/community-plugins.json`) as string[];
 		if (enabled && !list.includes(id)) this.fs.put(`${CFG}/community-plugins.json`, JSON.stringify([...list, id]));
@@ -183,7 +183,7 @@ describe("a new vault pulls the whole profile", () => {
 		const r = await b.pull(true);
 		expect(r.failed).toEqual([]);
 		expect(b.plugins()).toEqual(["dataview", "old-plugin", "templater"]);
-		expect(b.fs.text(`${CFG}/plugins/templater/main.js`)).toBe("// templater 2.1.0\n");
+		expect(b.fs.text(`${CFG}/plugins/templater/main.js`)).toBe("// templater 2.1.0\n\n/* nosourcemap */");
 		expect(b.fs.text(`${CFG}/plugins/templater/styles.css`)).toBe(".t{}");
 		expect(b.fs.json(`${CFG}/community-plugins.json`)).toEqual(["dataview", "old-plugin", "templater"]);
 		expect(b.fs.json(`${CFG}/plugins/dataview/data.json`)).toEqual({ enableDataviewJs: true, refreshInterval: 2500 });
@@ -382,7 +382,7 @@ describe("plugins outside the catalog", () => {
 		a.fs.put(`${CFG}/plugins/my-private/styles.css`, ".p{}");
 		await a.push();
 		const files = gh.snapshot();
-		expect(files.get("vendor/plugins/my-private/main.js")).toBe("// my-private 0.3.0\n");
+		expect(files.get("vendor/plugins/my-private/main.js")).toBe("// my-private 0.3.0\n\n/* nosourcemap */");
 		expect(JSON.parse(files.get("profile.json")!).plugins["my-private"].source).toBe("vendor");
 		const b = await freshVault("B");
 		expect(b.fs.text(`${CFG}/plugins/my-private/styles.css`)).toBe(".p{}");
@@ -425,7 +425,7 @@ describe("updates and undo", () => {
 		await a.push();
 		expect((await b.counts()).incoming).toEqual(["plugin:dataview"]);
 		await b.pull();
-		expect(b.fs.text(`${CFG}/plugins/dataview/main.js`)).toBe("// dataview 0.5.68\n");
+		expect(b.fs.text(`${CFG}/plugins/dataview/main.js`)).toBe("// dataview 0.5.68\n\n/* nosourcemap */");
 		expect(b.fs.json(`${CFG}/plugins/dataview/data.json`)).toEqual({ enableDataviewJs: true, refreshInterval: 2500 });
 	});
 
