@@ -1,0 +1,9 @@
+{
+  "id": "vault-profile-sync",
+  "name": "Vault Profile Sync",
+  "version": "0.1.0",
+  "minAppVersion": "1.11.4",
+  "description": "Keep one profile of plugins, plugin settings, hotkeys, snippets, themes and Obsidian settings in a GitHub repository and pull or push it from any vault.",
+  "author": "artemc",
+  "isDesktopOnly": true
+}
