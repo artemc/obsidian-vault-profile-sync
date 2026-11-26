@@ -1,5 +1,5 @@
 /**
- * Vault Profile Sync: one settings profile on GitHub, shared by many vaults.
+ * Vault Profile Sync: one settings profile in a GitHub repository or a folder, shared by many vaults.
  * This file wires the engine to Obsidian: stored settings and base, token,
  * commands, ribbon, status bar and the background check.
  */
@@ -12,13 +12,16 @@ import { Catalog } from "./engine/catalog";
 import { SyncEngine, type PullProgress, type PullResult, type PushResult, type SyncStatus } from "./engine/sync";
 import { joinPath } from "./io";
 import { MACHINE_TOKEN_KEY, TokenStore } from "./core/token";
-import { adapterFs, appHost, appStorage, obsidianHttp, reloadApp, systemCipher } from "./obsidian-host";
+import { adapterFs, appHost, appStorage, nodeDisk, obsidianHttp, reloadApp, systemCipher } from "./obsidian-host";
+import { hasLocation, sameStore, type StoreRef } from "./core/stores";
+import { FolderStore } from "./remote/folder";
 import { GitHubClient, parseRepo } from "./remote/github";
+import { GitHubStore, type ProfileStore } from "./remote/store";
 import { t } from "./ui/i18n";
 import { ProfileSettingTab } from "./ui/SettingsTab";
 import { SyncModal } from "./ui/SyncModal";
 
-export interface PluginData {
+export interface PluginData extends StoreRef {
 	repo: string;
 	branch: string;
 	folder: string;
@@ -31,6 +34,8 @@ export interface PluginData {
 }
 
 const DEFAULTS: PluginData = {
+	kind: "github",
+	path: "",
 	repo: "",
 	branch: "main",
 	folder: "",
@@ -44,6 +49,8 @@ const DEFAULTS: PluginData = {
 const TOKEN_SECRET = "vault-profile-sync-github-token";
 /** Shared by all vaults on this machine (window.localStorage is per app, not per vault). */
 const LAST_REMOTE_KEY = "vault-profile-sync:last-remote";
+/** Stores used on this machine, most recent first. */
+export const STORES_KEY = "vault-profile-sync:stores";
 
 export default class VaultProfileSync extends Plugin {
 	data: PluginData = structuredClone(DEFAULTS);
@@ -92,20 +99,48 @@ export default class VaultProfileSync extends Plugin {
 			localExclude: Array.isArray(raw.localExclude) ? raw.localExclude : [],
 			base: raw.base && typeof raw.base === "object" ? { location: raw.base.location ?? "", items: raw.base.items ?? {} } : { location: "", items: {} },
 		};
-		if (!this.data.repo) {
-			try {
-				const last = JSON.parse(window.localStorage.getItem(LAST_REMOTE_KEY) ?? "null") as Partial<PluginData> | null;
-				if (last?.repo) Object.assign(this.data, { repo: last.repo, branch: last.branch || "main", folder: last.folder ?? "" });
-			} catch {
-				// nothing remembered
-			}
+		if (this.data.kind !== "folder") this.data.kind = "github";
+		// A new vault starts with the store used last on this machine.
+		if (!hasLocation(this.data)) {
+			const last = this.savedStores()[0];
+			if (last) this.useStore(last);
 		}
+	}
+
+	/** Stores used by any vault on this machine, most recent first. */
+	savedStores(): StoreRef[] {
+		try {
+			const raw = JSON.parse(window.localStorage.getItem(STORES_KEY) ?? "null") as unknown;
+			if (Array.isArray(raw)) {
+				return raw
+					.filter((x): x is StoreRef => !!x && typeof x === "object")
+					.map((x) => ({ kind: x.kind === "folder" ? "folder" : "github", repo: x.repo ?? "", branch: x.branch || "main", folder: x.folder ?? "", path: x.path ?? "" }) as StoreRef)
+					.filter(hasLocation);
+			}
+			// Older versions remembered one GitHub location.
+			const last = JSON.parse(window.localStorage.getItem(LAST_REMOTE_KEY) ?? "null") as Partial<StoreRef> | null;
+			if (last?.repo) return [{ kind: "github", repo: last.repo, branch: last.branch || "main", folder: last.folder ?? "", path: "" }];
+		} catch {
+			// nothing remembered
+		}
+		return [];
+	}
+
+	useStore(s: StoreRef): void {
+		Object.assign(this.data, { kind: s.kind, repo: s.repo, branch: s.branch || "main", folder: s.folder, path: s.path });
+	}
+
+	forgetStore(s: StoreRef): void {
+		window.localStorage.setItem(STORES_KEY, JSON.stringify(this.savedStores().filter((x) => !sameStore(x, s))));
 	}
 
 	async saveSettings(): Promise<void> {
 		await this.saveData(this.data);
-		if (this.data.repo) {
-			window.localStorage.setItem(LAST_REMOTE_KEY, JSON.stringify({ repo: this.data.repo, branch: this.data.branch, folder: this.data.folder }));
+		const d = this.data;
+		if (hasLocation(d)) {
+			const cur: StoreRef = { kind: d.kind, repo: d.repo, branch: d.branch, folder: d.folder, path: d.path };
+			const list = [cur, ...this.savedStores().filter((x) => !sameStore(x, cur))].slice(0, 20);
+			window.localStorage.setItem(STORES_KEY, JSON.stringify(list));
 		}
 	}
 
@@ -135,11 +170,13 @@ export default class VaultProfileSync extends Plugin {
 	}
 
 	isConfigured(): boolean {
+		if (this.data.kind === "folder") return !!this.data.path.trim();
 		return !!parseRepo(this.data.repo) && !!this.getToken();
 	}
 
 	/** Identifies the profile the base belongs to; a different location starts from an empty base. */
 	location(): string {
+		if (this.data.kind === "folder") return `folder:${this.data.path.trim().replace(/[\\/]+$/, "")}`;
 		const r = parseRepo(this.data.repo);
 		return `${r ? `${r.owner}/${r.name}`.toLowerCase() : ""}#${this.data.branch.trim() || "main"}#${this.data.folder.trim().replace(/^\/+|\/+$/g, "")}`;
 	}
@@ -160,15 +197,21 @@ export default class VaultProfileSync extends Plugin {
 		return new GitHubClient(obsidianHttp, r.owner, r.name, token);
 	}
 
+	store(): ProfileStore {
+		if (this.data.kind === "folder") {
+			if (!this.data.path.trim()) throw new Error(t("notConfigured"));
+			return new FolderStore(nodeDisk(), this.data.path.trim());
+		}
+		return new GitHubStore(this.client(), this.data.branch.trim() || "main", this.data.folder);
+	}
+
 	engine(): SyncEngine {
 		return new SyncEngine(
-			{ fs: adapterFs(this.app.vault.adapter), http: obsidianHttp, host: appHost(this.app), client: this.client(), catalog: this.catalog },
+			{ fs: adapterFs(this.app.vault.adapter), http: obsidianHttp, host: appHost(this.app), store: this.store(), catalog: this.catalog },
 			{
 				configDir: this.app.vault.configDir,
 				selfId: this.manifest.id,
 				vaultName: this.app.vault.getName(),
-				branch: this.data.branch.trim() || "main",
-				folder: this.data.folder,
 				localExclude: this.data.localExclude,
 				shared: this.data.shared,
 			},
@@ -306,7 +349,7 @@ export default class VaultProfileSync extends Plugin {
 		try {
 			const status = await this.compare();
 			const n = status.result.incoming.length + status.result.conflicts.length;
-			const head = status.remote.head?.sha ?? null;
+			const head = status.remote.head?.version ?? null;
 			if (n > 0 && head !== this.notifiedHead) {
 				this.notifiedHead = head;
 				const frag = createFragment((f) => {

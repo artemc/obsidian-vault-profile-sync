@@ -1,6 +1,6 @@
 /**
- * Reads the profile on GitHub into a snapshot. File items are hashed by their git
- * blob sha straight from the tree, so only profile.json is downloaded; other file
+ * Reads the profile from its store into a snapshot. File items are hashed by their
+ * git blob sha straight from the listing, so only profile.json is read; other file
  * contents are fetched on demand (diff view, pull).
  */
 
@@ -19,12 +19,11 @@ import {
 	type ProfileFile,
 	type Snapshot,
 } from "../core/model";
-import type { CommitInfo, GitHubClient } from "../remote/github";
+import type { ProfileStore, StoreHead } from "../remote/store";
 
 export interface RemoteState {
-	/** Head commit of the branch, or null if the branch or the repository has no commits. */
-	head: CommitInfo | null;
-	emptyRepo: boolean;
+	/** Version the comparison was made against, or null if the store is empty. */
+	head: StoreHead | null;
 	/** Blob sha by path relative to the profile folder. */
 	files: Map<string, string>;
 	profile: ProfileFile;
@@ -40,20 +39,12 @@ export function profilePrefix(folder: string): string {
 export class RemoteReader {
 	private blobCache = new Map<string, Uint8Array>();
 
-	constructor(
-		readonly client: GitHubClient,
-		readonly branch: string,
-		readonly folder: string,
-	) {}
-
-	get prefix(): string {
-		return profilePrefix(this.folder);
-	}
+	constructor(readonly store: ProfileStore) {}
 
 	async blob(sha: string): Promise<Uint8Array> {
 		let b = this.blobCache.get(sha);
 		if (!b) {
-			b = await this.client.getBlob(sha);
+			b = await this.store.read(sha);
 			this.blobCache.set(sha, b);
 		}
 		return b;
@@ -66,16 +57,7 @@ export class RemoteReader {
 	}
 
 	async read(exclude: ExcludeRules): Promise<RemoteState> {
-		const head = await this.client.getHead(this.branch);
-		const files = new Map<string, string>();
-		let commit: CommitInfo | null = null;
-		if (head.kind === "ok") {
-			commit = await this.client.getCommit(head.sha);
-			for (const e of await this.client.getTree(commit.treeSha)) {
-				if (e.type !== "blob" || !e.path.startsWith(this.prefix)) continue;
-				files.set(e.path.slice(this.prefix.length), e.sha);
-			}
-		}
+		const { head, files } = await this.store.list();
 
 		const profileSha = files.get(PROFILE_FILE);
 		const profile = profileSha ? parseProfile(utf8Decode(await this.blob(profileSha))) : emptyProfile();
@@ -95,6 +77,6 @@ export class RemoteReader {
 		}
 		if (profileSha) snapshot.set(SETTINGS_KEY, await settingsItem(profile.settings));
 
-		return { head: commit, emptyRepo: head.kind === "empty-repo", files, profile, profileExists: !!profileSha, snapshot };
+		return { head, files, profile, profileExists: !!profileSha, snapshot };
 	}
 }

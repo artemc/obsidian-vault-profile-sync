@@ -6,6 +6,7 @@
 import { Modal, Notice, setIcon, type App } from "obsidian";
 import type { Change } from "../core/classify";
 import type { SyncStatus } from "../engine/sync";
+import { storeLabel } from "../core/stores";
 import type VaultProfileSync from "../main";
 import { RemoteMovedError } from "../remote/github";
 import { DiffModal, type Direction } from "./DiffModal";
@@ -75,16 +76,17 @@ export class SyncModal extends Modal {
 		contentEl.empty();
 
 		const head = contentEl.createDiv({ cls: "vps-head" });
-		head.createDiv({ cls: "vps-repo", text: `${this.plugin.data.repo} · ${this.plugin.data.branch}${this.plugin.data.folder ? ` · ${this.plugin.data.folder}` : ""}` });
+		head.createDiv({ cls: "vps-repo", text: storeLabel(this.plugin.data) });
 		const c = status.remote.head;
 		head.createDiv({
 			cls: "vps-muted",
-			text: c ? `${t("headCommit")}: ${c.message.split("\n")[0]} · ${new Date(c.date).toLocaleString()}` : t("noCommits"),
+			text: !c ? t("noCommits") : c.message ? `${t("headCommit")}: ${c.message.split("\n")[0]} · ${new Date(c.date ?? "").toLocaleString()}` : "",
 		});
 
 		const all = [...incoming, ...outgoing, ...conflicts];
 		if (all.length === 0) {
 			contentEl.createDiv({ cls: "vps-insync", text: t("inSync") });
+			this.excludedSection();
 			return;
 		}
 
@@ -102,6 +104,8 @@ export class SyncModal extends Modal {
 		this.section(t("incoming"), t("incomingHint"), "arrow-down", incoming, "in");
 		this.section(t("outgoing"), t("outgoingHint"), "arrow-up", outgoing, "out");
 		this.section(t("conflicts"), t("conflictsHint"), "alert-triangle", conflicts, "conflict");
+
+		this.excludedSection();
 
 		this.footerEl = contentEl.createDiv({ cls: "vps-footer" });
 		this.renderFooter();
@@ -180,6 +184,30 @@ export class SyncModal extends Modal {
 			setIcon(ex, "eye-off");
 			ex.addEventListener("click", () => void this.excludeHere(change.key));
 		}
+	}
+
+	/** What this vault excludes stays listed, so it can be synced again from here. */
+	private excludedSection(): void {
+		const keys = this.plugin.data.localExclude;
+		if (keys.length === 0) return;
+		const sec = this.contentEl.createDiv({ cls: "vps-section vps-excluded" });
+		const h = sec.createDiv({ cls: "vps-section-head" });
+		setIcon(h.createSpan({ cls: "vps-section-icon" }), "eye-off");
+		h.createSpan({ cls: "vps-section-title", text: `${t("excludedHere")} (${keys.length})` });
+		h.createSpan({ cls: "vps-muted", text: ` - ${t("excludedHint")}` });
+		for (const key of keys) {
+			const row = sec.createDiv({ cls: "vps-row vps-row-excluded" });
+			row.createDiv({ cls: "vps-row-text" }).createDiv({ cls: "vps-row-label", text: /[*?]/.test(key) ? key : itemLabel(key) });
+			const btn = row.createEl("button", { cls: "clickable-icon", attr: { "aria-label": t("includeHere") } });
+			setIcon(btn, "eye");
+			btn.addEventListener("click", () => void this.includeHere(key));
+		}
+	}
+
+	private async includeHere(key: string): Promise<void> {
+		this.plugin.data.localExclude = this.plugin.data.localExclude.filter((k) => k !== key);
+		await this.plugin.saveSettings();
+		await this.load();
 	}
 
 	private picks(): { pull: Change[]; push: Change[] } {

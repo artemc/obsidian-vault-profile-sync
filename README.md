@@ -1,6 +1,7 @@
 # Vault Profile Sync
 
-Keep one **settings profile** for many Obsidian vaults in a GitHub repository:
+Keep one **settings profile** for many Obsidian vaults in a GitHub repository or a
+plain folder:
 community plugins (with their versions), plugin settings, hotkeys, CSS snippets,
 themes and Obsidian's own settings. In any vault you see what changed, then **Pull**
 or **Push**. A new vault is set up by installing this plugin, entering the repository
@@ -63,6 +64,18 @@ history of the repository is a readable log of who changed what.
 
 ## Setup
 
+The profile lives either in a **folder** or in a **GitHub repository**.
+
+**Folder** (fast, no token): any absolute path the computer can reach - a local
+folder, a synced one (Dropbox, iCloud Drive, Syncthing) or a network share mounted by
+the system. Choose *Profile store → Folder* in the settings, enter the path, press
+*Check connection*, then Push from the vault you want to share. The folder is not a
+git repository and does not need to be one; names starting with a dot (`.git`,
+`.DS_Store`) are ignored, so you may keep it under git yourself for history. A push is
+refused when the folder changed after the comparison, as on GitHub.
+
+**GitHub** (works anywhere with internet):
+
 1. Create a **private** GitHub repository for the profile. It may be empty.
 2. Create a [fine-grained token](https://github.com/settings/personal-access-tokens/new)
    with access to **that repository only** and the permission
@@ -76,8 +89,9 @@ history of the repository is a readable log of who changed what.
 5. In the vault whose setup you want to share, open the profile window (ribbon icon,
    status bar or the command *Open settings profile*) and press **Push**.
 
-The repository, branch, folder and token are entered once per computer: every next
-vault picks them up. The token is encrypted with the system keychain (Keychain on
+Every store used on a computer is remembered for all its vaults: a new vault starts
+connected to the one used last, and *Stores on this computer* in the settings switches
+to another one in one click. The token is entered once per computer. The token is encrypted with the system keychain (Keychain on
 macOS, the credential store on Windows, the Secret Service keyring on Linux), the
 same way Obsidian protects its own secrets, and is not stored in any vault. Where no
 keychain is available, the token goes to the vault's own secret storage instead, and
@@ -113,6 +127,9 @@ Patterns, one per line:
 - `config:<file>.json`, `snippet:<name>`, `theme:<name>`;
 - a bare name matches every kind; `*` matches anything.
 
+The eye button in the profile window excludes an item in this vault only. Excluded
+items stay listed at the bottom of the window; press the eye again to sync them.
+
 *This vault only* exclusions keep a plugin local: it is neither pushed nor removed by a
 pull. *Shared* exclusions, extra secret keys and fields that are not secret travel with
 the profile to every vault. A field counts as not secret only once the list is in the
@@ -121,13 +138,14 @@ include the field's value.
 
 ### Several profiles
 
-Set a **profile folder** (for example `profiles/legal` and `profiles/personal`) to keep
-several profiles in one repository. A vault follows one profile at a time.
+Use one folder per profile, or set a **profile folder** inside a repository (for
+example `profiles/legal` and `profiles/personal`) to keep several profiles in one
+repository. A vault follows one profile at a time.
 
 ## Limitations
 
-- Desktop only for now (`isDesktopOnly`); the code avoids Node APIs, so mobile is
-  planned, not ruled out.
+- Desktop only for now (`isDesktopOnly`). The GitHub store avoids Node APIs, so mobile
+  is planned for it; a folder store needs the desktop app.
 - Requires Obsidian 1.11.4 or newer (secret storage for the token).
 - After a pull Obsidian is reloaded: this is the reliable way to apply plugin, hotkey
   and appearance changes.

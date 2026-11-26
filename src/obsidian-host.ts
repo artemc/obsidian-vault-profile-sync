@@ -7,6 +7,7 @@
 import { requestUrl, type App, type DataAdapter } from "obsidian";
 import type { Cipher, KeyValue } from "./core/token";
 import type { Fs, Host, Http } from "./io";
+import type { DiskFs } from "./remote/folder";
 
 interface PluginManager {
 	plugins?: Record<string, unknown>;
@@ -90,6 +91,14 @@ export function systemCipher(): Cipher | null {
 		encrypt: (plain) => ss.encryptString(plain).toString("base64"),
 		decrypt: (data) => ss.decryptString(B.from(data, "base64")),
 	};
+}
+
+/** Node's fs/promises; desktop only. */
+export function nodeDisk(): DiskFs {
+	const req = (window as unknown as { require?: (m: string) => unknown }).require;
+	const fs = req?.("fs") as { promises?: DiskFs } | undefined;
+	if (!fs?.promises) throw new Error("A profile folder needs the desktop app.");
+	return fs.promises;
 }
 
 export function reloadApp(app: App): void {

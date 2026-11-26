@@ -1,6 +1,6 @@
 {
   "name": "vault-profile-sync",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Share one profile of plugins, settings, hotkeys, snippets and appearance across many Obsidian vaults via a GitHub repository.",
   "main": "main.js",
   "private": true,

@@ -13,7 +13,6 @@ import {
 	PROFILE_FILE,
 	SETTINGS_KEY,
 	serializeProfile,
-	emptyProfile,
 	emptySettings,
 	THEME_FILES,
 	vendorPluginDir,
@@ -24,7 +23,8 @@ import {
 } from "../core/model";
 import { commonKeys, restoreSecrets, SecretMatcher } from "../core/secrets";
 import { joinPath, listRecursive, readTextIfExists, writeBytes, type Fs, type Host, type Http } from "../io";
-import type { GitHubClient, TreeWrite } from "../remote/github";
+import type { TreeWrite } from "../remote/github";
+import type { ProfileStore } from "../remote/store";
 import { BackupStore } from "./backup";
 import { downloadPlugin, downloadTheme, type Catalog, type FileSet } from "./catalog";
 import { readEnabledPlugins, scanLocal, type LocalState } from "./local";
@@ -34,8 +34,6 @@ export interface SyncConfig {
 	configDir: string;
 	selfId: string;
 	vaultName: string;
-	branch: string;
-	folder: string;
 	localExclude: string[];
 	shared: SharedSettings;
 }
@@ -44,7 +42,7 @@ export interface SyncDeps {
 	fs: Fs;
 	http: Http;
 	host: Host;
-	client: GitHubClient;
+	store: ProfileStore;
 	catalog: Catalog;
 }
 
@@ -98,7 +96,7 @@ export class SyncEngine {
 		private readonly deps: SyncDeps,
 		private readonly cfg: SyncConfig,
 	) {
-		this.reader = new RemoteReader(deps.client, cfg.branch, cfg.folder);
+		this.reader = new RemoteReader(deps.store);
 	}
 
 	/** This plugin never syncs itself, on either side. */
@@ -348,23 +346,14 @@ export class SyncEngine {
 	}
 
 	/**
-	 * Publish this vault's side of the given changes as one commit on top of the
-	 * head the comparison was made against. Throws RemoteMovedError if it moved.
+	 * Publish this vault's side of the given changes as one write on top of the
+	 * version the comparison was made against. Throws RemoteMovedError if it moved.
 	 */
 	async push(status: SyncStatus, changes: Change[], base: Base): Promise<PushResult> {
-		const { client } = this.deps;
-		const prefix = this.reader.prefix;
-		let parent = status.remote.head;
-		let remote = status.remote;
-
-		if (!parent && remote.emptyRepo) {
-			const sha = await client.bootstrapEmptyRepo(this.cfg.branch, prefix + PROFILE_FILE, serializeProfile(emptyProfile()));
-			parent = await client.getCommit(sha);
-			remote = { ...remote, files: new Map([[PROFILE_FILE, ""]]), profileExists: true };
-		}
+		const remote = status.remote;
 
 		const writes = new Map<string, string | null>();
-		const write = (rel: string, content: string | null) => writes.set(prefix + rel, content);
+		const write = (rel: string, content: string | null) => writes.set(rel, content);
 		const profile: ProfileFile = structuredClone(remote.profile);
 		let profileChanged = !remote.profileExists;
 
@@ -408,7 +397,7 @@ export class SyncEngine {
 		const lines = changes.map((c) => `- ${c.key} (${outgoingAction(c)})`);
 		const message = `Update ${changes.length} item(s) from vault "${this.cfg.vaultName}"\n\n${lines.join("\n")}\n`;
 		const treeWrites: TreeWrite[] = [...writes].map(([path, content]) => ({ path, content }));
-		const commit = await client.commit(this.cfg.branch, parent, treeWrites, message);
+		const commit = await this.deps.store.write(remote.head, treeWrites, message);
 
 		const newBase = { ...base };
 		for (const c of changes) {
