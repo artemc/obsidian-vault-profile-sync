@@ -1,4 +1,5 @@
 import type { Base, Change } from "../../src/core/classify";
+import type { IgnoredKeys } from "../../src/core/ignore";
 import { emptySettings, type SharedSettings } from "../../src/core/model";
 import { Catalog } from "../../src/engine/catalog";
 import { SyncEngine, type SyncStatus } from "../../src/engine/sync";
@@ -16,6 +17,7 @@ export class Vault {
 	base: Base = {};
 	shared: SharedSettings = emptySettings();
 	localExclude: string[] = [];
+	ignoredKeys: IgnoredKeys = {};
 	loaded = new Set<string>();
 	disabled: string[] = [];
 	/** What the engine talks to; a test may wrap it, e.g. in an HTTP cache. */
@@ -55,6 +57,7 @@ export class Vault {
 				selfId: "vault-profile-sync",
 				vaultName: this.name,
 				localExclude: this.localExclude,
+				ignoredKeys: this.ignoredKeys,
 				shared: this.shared,
 			},
 		);

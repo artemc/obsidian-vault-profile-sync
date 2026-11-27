@@ -1,12 +1,14 @@
 /** Plugin settings: connection, update checks, exclusions, backups. */
 
-import { PluginSettingTab, Setting, type App } from "obsidian";
+import { PluginSettingTab, Setting, setIcon, type App } from "obsidian";
 import { parsePatternList } from "../core/exclude";
+import { pathLabel } from "../core/ignore";
 import { sameStore, storeLabel } from "../core/stores";
 import type { FolderStore } from "../remote/folder";
 import { KEEP_BACKUPS } from "../engine/backup";
 import type VaultProfileSync from "../main";
 import { t } from "./i18n";
+import { itemLabel } from "./labels";
 
 export class ProfileSettingTab extends PluginSettingTab {
 	constructor(
@@ -198,6 +200,7 @@ export class ProfileSettingTab extends PluginSettingTab {
 			data.localExclude = v;
 			await plugin.saveSettings();
 		});
+		this.ignoredKeys();
 
 		new Setting(containerEl).setName(t("sShared")).setHeading().setDesc(t("sSharedDesc"));
 		this.patterns(t("sSharedExclude"), "", data.shared.exclude, async (v) => {
@@ -223,6 +226,25 @@ export class ProfileSettingTab extends PluginSettingTab {
 				for (const b of items) list.createDiv({ text: `${new Date(b.created).toLocaleString()} - ${b.label}` });
 			});
 		new Setting(containerEl).addButton((b) => b.setButtonText(t("sUndo")).onClick(() => void plugin.undoLastPull()));
+	}
+
+	/** Keys locked in the sync window, each with a button to track it again. */
+	private ignoredKeys(): void {
+		const { plugin } = this;
+		new Setting(this.containerEl).setName(t("sIgnoredKeys")).setDesc(t("sIgnoredKeysDesc"));
+		const list = this.containerEl.createDiv({ cls: "vps-ignored-list" });
+		const entries = Object.entries(plugin.data.ignoredKeys).flatMap(([key, paths]) => paths.map((path) => ({ key, path })));
+		if (entries.length === 0) list.createDiv({ cls: "vps-muted", text: t("sNoIgnoredKeys") });
+		for (const { key, path } of entries) {
+			const row = list.createDiv({ cls: "vps-ignored-row" });
+			row.createSpan({ cls: "vps-ignored-file", text: itemLabel(key) });
+			row.createSpan({ cls: "vps-ignored-key", text: pathLabel(path) });
+			const btn = row.createEl("button", { cls: "clickable-icon", attr: { "aria-label": t("trackKey") } });
+			setIcon(btn, "lock");
+			btn.addEventListener("click", () => {
+				void plugin.setKeyIgnored(key, path, false).then(() => this.display());
+			});
+		}
 	}
 
 	private patterns(name: string, desc: string, value: string[], save: (v: string[]) => Promise<void>): void {

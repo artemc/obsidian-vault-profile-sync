@@ -4,13 +4,15 @@
  * (Obsidian settings, core plugins, community plugins with their settings, ...)
  * and colored by how each side differs from the base. Any row opens to show the
  * difference key by key or both versions whole, side by side; a JSON file can be
- * merged there, key by key.
+ * merged there, key by key, and any key of it can be locked: not tracked in this
+ * vault, while the rest of the file still is.
  */
 
 import { Modal, Notice, setIcon, type App } from "obsidian";
 import { defaultDirection, sideStates, type Change, type Direction, type SideState } from "../core/classify";
 import { itemDiff, lineDiff, sideBySide } from "../core/diff";
 import { buildTree, corePluginIds, type GroupId, type TreeGroup, type TreeRow } from "../core/groups";
+import { isIgnoredPath, pathLabel, type KeyPath } from "../core/ignore";
 import { mergedChange, prepareMerge, rowId, type JsonMerge, type MergeSide } from "../core/merge";
 import { splitKey } from "../core/model";
 import { storeLabel } from "../core/stores";
@@ -152,9 +154,27 @@ export class SyncModal extends Modal {
 		const now = fingerprints(this.status);
 		const kept = (k: string) => !!before && before.get(k) === now.get(k);
 		this.dirs = new Map(this.differing().map((c) => [c.key, kept(c.key) ? (this.dirs.get(c.key) ?? defaultDirection(c)) : defaultDirection(c)]));
-		for (const m of [this.picks, this.loaded, this.views]) for (const k of [...m.keys()]) if (!kept(k)) m.delete(k);
-		for (const k of [...this.expanded]) if (!kept(k)) this.expanded.delete(k);
+		for (const m of [this.picks, this.loaded]) for (const k of [...m.keys()]) if (!kept(k)) m.delete(k);
+		// What is open is only a view: a row stays open while its contents change (a key
+		// locked inside it changes its hash), and is loaded again.
+		if (!before) {
+			this.views.clear();
+			this.expanded.clear();
+		}
 		this.render();
+		for (const key of this.expanded) {
+			const c = this.change(key);
+			if (c && !this.loaded.has(key)) void this.ensureLoaded(c);
+		}
+	}
+
+	private change(key: string): Change | undefined {
+		const { incoming, outgoing, conflicts, same } = this.status!.result;
+		return [...incoming, ...outgoing, ...conflicts, ...same].find((c) => c.key === key);
+	}
+
+	private ignored(key: string): KeyPath[] {
+		return this.plugin.ignoredPaths(key);
 	}
 
 	private differing(): Change[] {
@@ -256,7 +276,7 @@ export class SyncModal extends Modal {
 
 	/** Excluded items always stay listed: they are what this vault chose not to compare. */
 	private visible(row: TreeRow): boolean {
-		if (!this.onlyDiff || row.change === null) return true;
+		if (!this.onlyDiff || row.change === null || this.expanded.has(row.key)) return true;
 		return differs(row.change) || row.children.some((r) => this.visible(r));
 	}
 
@@ -267,7 +287,8 @@ export class SyncModal extends Modal {
 		const changed = flat.map((r) => r.change).filter(differs);
 		const same = flat.filter((r) => r.change && r.change.status === "same").length;
 		const locked = flat.some((r) => r.change === null);
-		const open = this.groupOpen.get(group.id) ?? (changed.length > 0 || (this.onlyDiff && locked));
+		const opened = flat.some((r) => this.expanded.has(r.key));
+		const open = this.groupOpen.get(group.id) ?? (changed.length > 0 || opened || (this.onlyDiff && locked));
 
 		const head = grid.createDiv({ cls: "vps-trow vps-group" });
 		const toggle = () => {
@@ -314,7 +335,7 @@ export class SyncModal extends Modal {
 		}
 	}
 
-	private sideCell(cell: HTMLElement, key: string, item: Change["local"], state: SideState): HTMLElement {
+	private sideCell(cell: HTMLElement, key: string, item: Change["local"], state: SideState, vault: boolean): HTMLElement {
 		const name = cell.createSpan({ cls: `vps-name vps-openable vps-st-${state}` });
 		name.setText(shortName(key));
 		const v = itemVersion(item);
@@ -323,6 +344,13 @@ export class SyncModal extends Modal {
 		const st = STATE_TEXT[state];
 		if (st) name.createSpan({ cls: "vps-state", text: ` (${t(st)})` });
 		name.setAttr("title", itemLabel(key));
+		// Locked keys are this vault's rule, so they are marked on its side only.
+		const ignored = vault ? this.ignored(key) : [];
+		if (ignored.length > 0) {
+			const mark = cell.createSpan({ cls: "vps-keys-ignored", attr: { title: `${t("keysIgnored")}: ${ignored.map(pathLabel).join(", ")}` } });
+			setIcon(mark.createSpan({ cls: "vps-keys-ignored-icon" }), "lock");
+			mark.createSpan({ text: String(ignored.length) });
+		}
 		return name;
 	}
 
@@ -363,8 +391,8 @@ export class SyncModal extends Modal {
 		const chev = left.createSpan({ cls: "vps-chevron", attr: { "aria-label": t("showContents") } });
 		setIcon(chev, open ? "chevron-down" : "chevron-right");
 		chev.addEventListener("click", toggle);
-		this.sideCell(left, row.key, change.local, states.local).addEventListener("click", toggle);
-		this.sideCell(right, row.key, change.remote, states.remote).addEventListener("click", toggle);
+		this.sideCell(left, row.key, change.local, states.local, true).addEventListener("click", toggle);
+		this.sideCell(right, row.key, change.remote, states.remote, false).addEventListener("click", toggle);
 
 		if (changed) {
 			const dir = this.dir(change);
@@ -394,7 +422,7 @@ export class SyncModal extends Modal {
 			const engine = this.plugin.engine();
 			const local = await engine.sideText(this.status!, change, "local");
 			const remote = await engine.sideText(this.status!, change, "remote");
-			this.loaded.set(change.key, { local, remote, merge: prepareMerge(local, remote) });
+			this.loaded.set(change.key, { local, remote, merge: prepareMerge(local, remote, this.ignored(change.key)) });
 		} catch (e) {
 			this.loaded.set(change.key, { error: e instanceof Error ? e.message : String(e) });
 		}
@@ -412,9 +440,10 @@ export class SyncModal extends Modal {
 			box.createDiv({ cls: "vps-error", text: l.error });
 			return;
 		}
-		const changed = differs(change);
-		const view: View = changed ? (this.views.get(change.key) ?? "diff") : "file";
-		if (changed) {
+		// A file with locked keys always offers its keys, even when only they differ.
+		const withTabs = change.status !== "same" || this.ignored(change.key).length > 0;
+		const view: View = withTabs ? (this.views.get(change.key) ?? "diff") : "file";
+		if (withTabs) {
 			const tabs = box.createDiv({ cls: "vps-view-tabs" });
 			for (const [v, label] of [["diff", t("viewDiff")], ["file", t("viewFile")]] as const) {
 				const b = tabs.createEl("button", { cls: `vps-view-tab${v === view ? " is-active" : ""}`, text: label });
@@ -445,12 +474,32 @@ export class SyncModal extends Modal {
 		}
 	}
 
+	/** Keys of a file not tracked in this vault, each with its lock to track it again. */
+	private ignoredStrip(box: HTMLElement, key: string): void {
+		const ignored = this.ignored(key);
+		if (ignored.length === 0) return;
+		const strip = box.createDiv({ cls: "vps-ignored-strip" });
+		strip.createSpan({ cls: "vps-muted", text: `${t("keysIgnored")}:` });
+		for (const path of ignored) {
+			const chip = strip.createEl("button", { cls: "vps-ignored-chip", attr: { "aria-label": t("trackKey") } });
+			setIcon(chip.createSpan({ cls: "vps-chip-icon" }), "lock");
+			chip.createSpan({ text: pathLabel(path) });
+			chip.addEventListener("click", () => void this.setKeyIgnored(key, path, false));
+		}
+	}
+
+	private async setKeyIgnored(key: string, path: KeyPath, ignored: boolean): Promise<void> {
+		await this.plugin.setKeyIgnored(key, path, ignored);
+		await this.load(true);
+	}
+
 	/** What differs: key by key for JSON (where a merge picks values), line by line for other text. */
 	private differences(box: HTMLElement, change: Change, l: Loaded): void {
 		const merging = this.dir(change) === "merge";
 		if (merging && !l.merge) box.createDiv({ cls: "vps-error", text: t("notJson") });
 
 		const diff = itemDiff(l.local, l.remote);
+		if (diff.kind === "json") this.ignoredStrip(box, change.key);
 		if (diff.rows.length === 0) {
 			box.createDiv({ cls: "vps-muted", text: t("noDifference") });
 			return;
@@ -485,15 +534,30 @@ export class SyncModal extends Modal {
 		table.createDiv({ cls: "vps-kv-head" });
 		table.createDiv({ cls: "vps-kv-head", text: t("colVault") });
 		table.createDiv({ cls: "vps-kv-head", text: t("colRemote") });
+		const ignored = this.ignored(change.key);
+		const canLock = splitKey(change.key).kind === "config" || splitKey(change.key).kind === "plugin-data";
 		for (const row of diff.rows) {
 			const id = rowId(row);
 			const pick = picks.get(id) ?? "local";
-			table.createDiv({ cls: "vps-kv-path", text: row.path });
+			const off = isIgnoredPath(row.segments, ignored);
+			const exact = ignored.find((p) => p.length === row.segments.length && isIgnoredPath(row.segments, [p]));
+			const pathCell = table.createDiv({ cls: `vps-kv-path${off ? " is-ignored" : ""}` });
+			if (canLock && row.segments.length > 0) {
+				// A key locked through one of its parents is unlocked there, in the strip above.
+				const lock = pathCell.createEl("button", {
+					cls: `clickable-icon vps-key-lock${off ? " is-locked" : ""}`,
+					attr: { "aria-label": off ? t("trackKey") : t("ignoreKey") },
+				});
+				setIcon(lock, off ? "lock" : "lock-open");
+				lock.disabled = off && !exact;
+				lock.addEventListener("click", () => void this.setKeyIgnored(change.key, exact ?? row.segments, !off));
+			}
+			pathCell.createSpan({ text: row.path });
 			const cell = (side: MergeSide, value: string | undefined) => {
-				const el = table.createDiv({ cls: `vps-kv-val vps-kv-${side}` });
+				const el = table.createDiv({ cls: `vps-kv-val vps-kv-${side}${off ? " is-ignored" : ""}` });
 				if (value === undefined) el.createSpan({ cls: "vps-faint", text: "-" });
 				else el.setText(value);
-				if (!canPick) return;
+				if (!canPick || off) return;
 				el.toggleClass("is-picked", pick === side);
 				el.addEventListener("click", () => {
 					picks.set(id, side);
@@ -571,7 +635,7 @@ export class SyncModal extends Modal {
 			else if (d === "merge") {
 				const l = this.loaded.get(c.key);
 				if (!l || "error" in l || !l.merge) continue;
-				const m = await mergedChange(c, l.merge, this.picks.get(c.key) ?? new Map());
+				const m = await mergedChange(c, l.merge, this.picks.get(c.key) ?? new Map(), this.ignored(c.key));
 				if (m.pull) pull.push(m.change);
 				if (m.push) push.push(m.change);
 			}

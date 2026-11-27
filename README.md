@@ -136,6 +136,14 @@ items that are in sync.
 The lock button excludes an item in this vault only; it stays in place, greyed, so it
 can be unlocked from the same window.
 
+A single key of a JSON file can be locked too: open the file and click the lock next to
+the key (for example `enabledCssSnippets` in `appearance.json`, to keep a different set
+of snippets in each vault). A change of a locked key is not shown as a difference and does
+not travel: each side keeps its own value, and a vault that does not have the key at all
+takes it with the file. The other keys of the file sync as usual. Locked keys are listed
+above the file's differences and in the settings, where they can be unlocked. A key
+locked in one vault is still synced by the others.
+
 If the remote changes while you are reviewing, the push is refused and the
 comparison is shown again. A push never overwrites what it has not shown you.
 

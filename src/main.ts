@@ -6,6 +6,7 @@
 
 import { Notice, Plugin } from "obsidian";
 import type { Base, Change } from "./core/classify";
+import { addPath, normalizeIgnored, removePath, type IgnoredKeys, type KeyPath } from "./core/ignore";
 import { emptySettings, normalizeSettings, type SharedSettings } from "./core/model";
 import { BackupStore } from "./engine/backup";
 import { Catalog } from "./engine/catalog";
@@ -28,6 +29,8 @@ export interface PluginData extends StoreRef {
 	checkOnStartup: boolean;
 	checkIntervalMin: number;
 	localExclude: string[];
+	/** Keys inside JSON files that this vault does not track, by item key. Never synced. */
+	ignoredKeys: IgnoredKeys;
 	shared: SharedSettings;
 	/** What this vault and the profile at `location` last agreed on. Never synced. */
 	base: { location: string; items: Base };
@@ -42,6 +45,7 @@ const DEFAULTS: PluginData = {
 	checkOnStartup: true,
 	checkIntervalMin: 30,
 	localExclude: [],
+	ignoredKeys: {},
 	shared: emptySettings(),
 	base: { location: "", items: {} },
 };
@@ -97,6 +101,7 @@ export default class VaultProfileSync extends Plugin {
 			...raw,
 			shared: normalizeSettings(raw.shared),
 			localExclude: Array.isArray(raw.localExclude) ? raw.localExclude : [],
+			ignoredKeys: normalizeIgnored(raw.ignoredKeys),
 			base: raw.base && typeof raw.base === "object" ? { location: raw.base.location ?? "", items: raw.base.items ?? {} } : { location: "", items: {} },
 		};
 		if (this.data.kind !== "folder") this.data.kind = "github";
@@ -142,6 +147,21 @@ export default class VaultProfileSync extends Plugin {
 			const list = [cur, ...this.savedStores().filter((x) => !sameStore(x, cur))].slice(0, 20);
 			window.localStorage.setItem(STORES_KEY, JSON.stringify(list));
 		}
+	}
+
+	ignoredPaths(key: string): KeyPath[] {
+		return this.data.ignoredKeys[key] ?? [];
+	}
+
+	/** Stop or start tracking one key of a JSON file in this vault. The next compare carries the base over. */
+	async setKeyIgnored(key: string, path: KeyPath, ignored: boolean): Promise<void> {
+		const cur = this.ignoredPaths(key);
+		const next = ignored ? addPath(cur, path) : removePath(cur, path);
+		const all = { ...this.data.ignoredKeys };
+		if (next.length > 0) all[key] = next;
+		else delete all[key];
+		this.data.ignoredKeys = all;
+		await this.saveSettings();
 	}
 
 	scheduleChecks(): void {
@@ -213,6 +233,7 @@ export default class VaultProfileSync extends Plugin {
 				selfId: this.manifest.id,
 				vaultName: this.app.vault.getName(),
 				localExclude: this.data.localExclude,
+				ignoredKeys: this.data.ignoredKeys,
 				shared: this.data.shared,
 			},
 		);

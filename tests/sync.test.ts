@@ -543,3 +543,107 @@ describe("two-panel window: any direction for any change", () => {
 		expect(a.fs.json(`${CFG}/plugins/templater/data.json`)).toEqual({ ...want, openai_api_key: "sk-secret-A" });
 	});
 });
+
+describe("keys not tracked in this vault", () => {
+	const APP = "config:appearance.json";
+	const snippetsKey = { [APP]: [["enabledCssSnippets"]] };
+	const appearance = (v: Vault) => v.fs.json(`${CFG}/appearance.json`) as Record<string, unknown>;
+	const inProfile = () => JSON.parse(gh.snapshot().get("config/appearance.json")!) as Record<string, unknown>;
+	/** The window stores the settled base after every compare, as the plugin does. */
+	const settle = async (v: Vault) => {
+		v.base = (await v.status()).result.settledBase;
+	};
+
+	it("a change of an ignored key alone is not a difference", async () => {
+		await a.push();
+		a.fs.put(`${CFG}/appearance.json`, JSON.stringify({ enabledCssSnippets: ["wide", "mine"], cssTheme: "" }));
+		expect((await a.counts()).outgoing).toEqual([APP]);
+		a.ignoredKeys = snippetsKey;
+		expect(await a.counts()).toEqual(inSync);
+	});
+
+	it("pushes the other keys and leaves the remote's value of the ignored one", async () => {
+		await a.push();
+		const b = await freshVault("B");
+		a.ignoredKeys = snippetsKey;
+		a.fs.put(`${CFG}/appearance.json`, JSON.stringify({ enabledCssSnippets: ["mine"], cssTheme: "Minimal" }));
+		expect((await a.counts()).outgoing).toEqual([APP]);
+		await a.push();
+		expect(inProfile()).toEqual({ enabledCssSnippets: ["wide"], cssTheme: "Minimal" });
+		expect(await a.counts()).toEqual(inSync);
+		// B tracks the key and sees only the theme coming
+		await b.pull();
+		expect(appearance(b)).toEqual({ enabledCssSnippets: ["wide"], cssTheme: "Minimal" });
+		expect(await b.counts()).toEqual(inSync);
+	});
+
+	it("pulls the other keys and keeps this vault's value of the ignored one", async () => {
+		await a.push();
+		const b = await freshVault("B");
+		b.ignoredKeys = snippetsKey;
+		b.fs.put(`${CFG}/appearance.json`, JSON.stringify({ enabledCssSnippets: ["b-only"], cssTheme: "" }));
+		await settle(b);
+		a.fs.put(`${CFG}/appearance.json`, JSON.stringify({ enabledCssSnippets: [], cssTheme: "Minimal" }));
+		await a.push();
+		expect(await b.counts()).toEqual({ incoming: [APP], outgoing: [], conflicts: [] });
+		await b.pull();
+		expect(appearance(b)).toEqual({ enabledCssSnippets: ["b-only"], cssTheme: "Minimal" });
+		expect(await b.counts()).toEqual(inSync);
+		expect(await a.counts()).toEqual(inSync);
+	});
+
+	it("a vault that has the file but not the key takes the remote's value", async () => {
+		await a.push();
+		const b = new Vault("B", gh);
+		b.ignoredKeys = snippetsKey;
+		b.fs.put(`${CFG}/appearance.json`, JSON.stringify({ cssTheme: "Other" }));
+		await b.pull(true);
+		expect(appearance(b)).toEqual({ enabledCssSnippets: ["wide"], cssTheme: "" });
+		// a vault without the file gets it whole
+		const c = new Vault("C", gh);
+		c.ignoredKeys = snippetsKey;
+		await c.pull(true);
+		expect(appearance(c)).toEqual({ enabledCssSnippets: ["wide"], cssTheme: "" });
+	});
+
+	it("locking a key keeps an outgoing file outgoing, and unlocking keeps an incoming one incoming", async () => {
+		await a.push();
+		const b = await freshVault("B");
+		// both the theme and the snippets changed here
+		b.fs.put(`${CFG}/appearance.json`, JSON.stringify({ enabledCssSnippets: ["b-only"], cssTheme: "Minimal" }));
+		await settle(b);
+		b.ignoredKeys = snippetsKey;
+		expect(await b.counts()).toEqual({ incoming: [], outgoing: [APP], conflicts: [] });
+		await b.push();
+		expect(await b.counts()).toEqual(inSync);
+
+		await a.pull();
+		await a.fs.write(`${CFG}/appearance.json`, JSON.stringify({ enabledCssSnippets: ["wide"], cssTheme: "Things" }));
+		await a.push();
+		expect(await b.counts()).toEqual({ incoming: [APP], outgoing: [], conflicts: [] });
+		b.ignoredKeys = {};
+		await settle(b);
+		expect(await b.counts()).toEqual({ incoming: [APP], outgoing: [], conflicts: [] });
+	});
+
+	it("a merge leaves the ignored key out and keeps it as each side has it", async () => {
+		await a.push();
+		const b = await freshVault("B");
+		b.ignoredKeys = snippetsKey;
+		a.fs.put(`${CFG}/appearance.json`, JSON.stringify({ enabledCssSnippets: ["a"], cssTheme: "A", baseFontSize: 18 }));
+		await a.push();
+		b.fs.put(`${CFG}/appearance.json`, JSON.stringify({ enabledCssSnippets: ["b"], cssTheme: "B" }));
+		const s = await b.status();
+		const conflict = pick(s, APP);
+		expect(conflict.status).toBe("conflict");
+		const engine = b.engine();
+		const m = prepareMerge(await engine.sideText(s, conflict, "local"), await engine.sideText(s, conflict, "remote"), snippetsKey[APP])!;
+		expect(m.rows.map((r) => r.path)).toEqual(["baseFontSize", "cssTheme"]);
+		const picks = new Map([[rowId(m.rows[0]), "remote" as const]]);
+		const merged = await mergedChange(conflict, m, picks, snippetsKey[APP]);
+		await apply(b, s, [merged.change], [merged.change]);
+		expect(appearance(b)).toEqual({ enabledCssSnippets: ["b"], cssTheme: "B", baseFontSize: 18 });
+		expect(inProfile()).toEqual({ enabledCssSnippets: ["a"], cssTheme: "B", baseFontSize: 18 });
+		expect(await b.counts()).toEqual(inSync);
+	});
+});

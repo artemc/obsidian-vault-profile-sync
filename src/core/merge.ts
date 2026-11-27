@@ -10,6 +10,7 @@
 import { canonicalJson, tryParseJson, type Json } from "./canonical";
 import type { Change } from "./classify";
 import { jsonDiff, type JsonDiffRow } from "./diff";
+import { comparedHash, comparedText, getAt, isIgnoredPath, setAt, type KeyPath } from "./ignore";
 import { fileItem, splitKey } from "./model";
 
 export type MergeSide = "local" | "remote";
@@ -27,42 +28,16 @@ export interface JsonMerge {
 	rows: JsonDiffRow[];
 }
 
-/** Rows that can be picked, or null if either side is absent or not JSON. */
-export function prepareMerge(localText: string | undefined, remoteText: string | undefined): JsonMerge | null {
+/**
+ * Rows that can be picked, or null if either side is absent or not JSON. Keys this
+ * vault does not track are not offered: the merge keeps this vault's value.
+ */
+export function prepareMerge(localText: string | undefined, remoteText: string | undefined, ignored: KeyPath[] = []): JsonMerge | null {
 	if (localText === undefined || remoteText === undefined) return null;
 	const local = tryParseJson(localText);
 	const remote = tryParseJson(remoteText);
 	if (local === undefined || remote === undefined) return null;
-	return { localText, remoteText, local, remote, rows: jsonDiff(local, remote) };
-}
-
-function isObject(v: Json | undefined): v is { [key: string]: Json } {
-	return v !== null && v !== undefined && typeof v === "object" && !Array.isArray(v);
-}
-
-/** Set (or with `undefined` remove) the value at `segments` inside `root`; returns the new root. */
-function setAt(root: Json, segments: string[], value: Json | undefined): Json | undefined {
-	if (segments.length === 0) return value;
-	if (!isObject(root)) return root;
-	let node: { [key: string]: Json } = root;
-	for (const key of segments.slice(0, -1)) {
-		const next = node[key];
-		if (!isObject(next)) node[key] = {};
-		node = node[key] as { [key: string]: Json };
-	}
-	const last = segments[segments.length - 1];
-	if (value === undefined) delete node[last];
-	else node[last] = value;
-	return root;
-}
-
-function getAt(root: Json, segments: string[]): Json | undefined {
-	let node: Json | undefined = root;
-	for (const key of segments) {
-		if (!isObject(node)) return undefined;
-		node = node[key];
-	}
-	return node;
+	return { localText, remoteText, local, remote, rows: jsonDiff(local, remote).filter((r) => !isIgnoredPath(r.segments, ignored)) };
 }
 
 /**
@@ -82,15 +57,19 @@ export function mergeJson(m: JsonMerge, picks: Map<string, MergeSide>): string {
 /**
  * The merge as a change whose both sides are the merged text. Pushed, it updates the
  * profile; pulled, it updates this vault (secrets restored); either way the base
- * becomes its hash. A side that already holds the result needs nothing.
+ * becomes its hash. A side that already holds the result needs nothing. With keys
+ * this vault does not track, the result is hashed and compared without them, as the
+ * comparison does.
  */
 export async function mergedChange(
 	change: Change,
 	m: JsonMerge,
 	picks: Map<string, MergeSide>,
+	ignored: KeyPath[] = [],
 ): Promise<{ change: Change; pull: boolean; push: boolean }> {
 	const text = mergeJson(m, picks);
 	const { kind, name } = splitKey(change.key);
-	const item = await fileItem(kind, name, text);
-	return { change: { ...change, local: item, remote: item }, pull: text !== m.localText, push: text !== m.remoteText };
+	const item = { ...(await fileItem(kind, name, text)), hash: await comparedHash(text, ignored) };
+	const seen = (t: string) => comparedText(t, ignored);
+	return { change: { ...change, local: item, remote: item }, pull: seen(text) !== seen(m.localText), push: seen(text) !== seen(m.remoteText) };
 }

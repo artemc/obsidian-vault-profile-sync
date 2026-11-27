@@ -7,6 +7,7 @@
 import { canonicalJson, tryParseJson, utf8Encode } from "../core/canonical";
 import { classify, outgoingAction, type Base, type Change, type Classification } from "../core/classify";
 import { ExcludeRules } from "../core/exclude";
+import { comparedHash, hashRule, keepIgnored, sameRule, type IgnoredKeys, type KeyPath } from "../core/ignore";
 import {
 	itemRepoPath,
 	PLUGIN_FILES,
@@ -17,6 +18,7 @@ import {
 	THEME_FILES,
 	vendorPluginDir,
 	vendorThemeDir,
+	splitKey,
 	type ItemKind,
 	type ProfileFile,
 	type SharedSettings,
@@ -35,6 +37,8 @@ export interface SyncConfig {
 	selfId: string;
 	vaultName: string;
 	localExclude: string[];
+	/** Keys inside JSON files that this vault does not track, by item key. */
+	ignoredKeys?: IgnoredKeys;
 	shared: SharedSettings;
 }
 
@@ -136,9 +140,54 @@ export class SyncEngine {
 		const kept: Base = {};
 		const compared: Base = {};
 		for (const [key, hash] of Object.entries(base)) (rules.isExcluded(key) ? kept : compared)[key] = hash;
+		await this.applyIgnored(local, remote, compared);
 		const result = classify(local.snapshot, remote.snapshot, compared);
 		result.settledBase = { ...result.settledBase, ...kept };
 		return { local, remote, result };
+	}
+
+	/** Ignored key paths of an item; only JSON files have keys. */
+	private ignored(key: string): KeyPath[] {
+		const { kind } = splitKey(key);
+		if (!JSON_KINDS.includes(kind)) return [];
+		return this.cfg.ignoredKeys?.[key] ?? [];
+	}
+
+	/**
+	 * Hashes both sides of every file with ignored keys without them (the remote side
+	 * is downloaded for that), and carries over a base recorded under another rule:
+	 * if it was one side's hash under that rule, it becomes that side's hash under
+	 * this one. Without this a key locked or unlocked in the window would turn an
+	 * incoming or outgoing file into a conflict. Changes `base` in place.
+	 */
+	private async applyIgnored(local: LocalState, remote: RemoteState, base: Base): Promise<void> {
+		const keys = new Set([
+			...Object.keys(this.cfg.ignoredKeys ?? {}).filter((k) => this.ignored(k).length > 0),
+			...Object.entries(base)
+				.filter(([k, h]) => h.includes("~") && JSON_KINDS.includes(splitKey(k).kind))
+				.map(([k]) => k),
+		]);
+		for (const key of keys) {
+			const paths = this.ignored(key);
+			const l = local.snapshot.get(key);
+			const r = remote.snapshot.get(key);
+			const { kind, name } = splitKey(key);
+			const remoteText = r ? await this.reader.text(remote, itemRepoPath(kind, name)!) : undefined;
+			if (l?.text !== undefined) l.hash = await comparedHash(l.text, paths);
+			if (r && remoteText !== undefined) {
+				r.text = remoteText;
+				r.hash = await comparedHash(remoteText, paths);
+			}
+			const b = base[key];
+			if (b === undefined) continue;
+			const old = hashRule(b);
+			if (sameRule(old, paths)) continue;
+			const was = async (text: string | undefined) => text !== undefined && (await comparedHash(text, old)) === b;
+			const localWas = await was(l?.text);
+			const remoteWas = await was(remoteText);
+			if (localWas && !remoteWas) base[key] = l!.hash;
+			else if (remoteWas && !localWas) base[key] = r!.hash;
+		}
 	}
 
 	/** Text of one side of a change for the diff view; undefined if absent. */
@@ -200,7 +249,9 @@ export class SyncEngine {
 				const incoming = tryParseJson(text);
 				if (incoming !== undefined) {
 					const current = await readTextIfExists(fs, path);
-					text = canonicalJson(restoreSecrets(incoming, current === null ? undefined : tryParseJson(current), secrets));
+					const mine = current === null ? undefined : tryParseJson(current);
+					// Keys this vault does not track keep the values it has.
+					text = canonicalJson(keepIgnored(restoreSecrets(incoming, mine, secrets), mine, this.ignored(change.key)));
 				}
 			}
 			if (kind === "plugin-data" && !(await fs.exists(this.pluginFolder(status, name)))) {
@@ -350,6 +401,16 @@ export class SyncEngine {
 
 	// ---------------------------------------------------------------- push
 
+	/** The text to push with the keys this vault does not track left as the remote has them. */
+	private async keepRemoteIgnored(remote: RemoteState, key: string, rel: string, text: string): Promise<string> {
+		const paths = this.ignored(key);
+		if (paths.length === 0 || !remote.files.has(rel)) return text;
+		const mine = tryParseJson(text);
+		const theirs = tryParseJson(await this.reader.text(remote, rel));
+		if (mine === undefined || theirs === undefined) return text;
+		return canonicalJson(keepIgnored(mine, theirs, paths));
+	}
+
 	private vendorPaths(remote: RemoteState, dir: string): string[] {
 		return [...remote.files.keys()].filter((p) => p.startsWith(`${dir}/`));
 	}
@@ -371,7 +432,7 @@ export class SyncEngine {
 			const { kind, name } = (local ?? change.remote)!;
 			if (kind === "config" || kind === "plugin-data" || kind === "snippet") {
 				const rel = itemRepoPath(kind, name)!;
-				if (local?.text !== undefined) write(rel, local.text);
+				if (local?.text !== undefined) write(rel, await this.keepRemoteIgnored(remote, change.key, rel, local.text));
 				else if (remote.files.has(rel)) write(rel, null);
 				continue;
 			}

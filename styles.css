@@ -496,3 +496,92 @@
 .vps-openable:hover {
 	text-decoration: underline;
 }
+
+/* Keys of a JSON file not tracked in this vault */
+.vps-keys-ignored {
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
+	flex: none;
+	margin-left: var(--size-2-3);
+	color: var(--text-accent);
+	font-size: var(--font-ui-smaller);
+}
+
+.vps-keys-ignored-icon,
+.vps-chip-icon {
+	display: inline-flex;
+}
+
+.vps-keys-ignored-icon svg,
+.vps-chip-icon svg,
+.vps-key-lock svg {
+	width: 12px;
+	height: 12px;
+}
+
+.vps-ignored-strip {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--size-2-3);
+	margin-bottom: var(--size-4-2);
+	font-size: var(--font-ui-small);
+}
+
+.vps-ignored-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--size-2-2);
+	height: auto;
+	padding: 2px var(--size-4-2);
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-smaller);
+	color: var(--text-accent);
+}
+
+.vps-kv-path {
+	display: flex;
+	align-items: flex-start;
+	gap: var(--size-2-2);
+}
+
+.vps-key-lock {
+	flex: none;
+	padding: 1px;
+	opacity: 0.55;
+}
+
+.vps-key-lock:hover,
+.vps-key-lock.is-locked {
+	opacity: 1;
+}
+
+.vps-key-lock.is-locked {
+	color: var(--text-accent);
+}
+
+.vps-kv > .is-ignored {
+	color: var(--text-faint);
+}
+
+.vps-ignored-list {
+	margin-bottom: var(--size-4-4);
+	padding: 0 var(--size-4-4);
+}
+
+.vps-ignored-row {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-2);
+	padding: 2px 0;
+}
+
+.vps-ignored-key {
+	font-family: var(--font-monospace);
+	color: var(--text-accent);
+}
+
+.vps-ignored-row .clickable-icon {
+	margin-left: auto;
+}
