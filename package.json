@@ -1,7 +1,7 @@
 {
   "name": "vault-profile-sync",
-  "version": "0.3.0",
-  "description": "Share one profile of plugins, settings, hotkeys, snippets and appearance across many Obsidian vaults via a GitHub repository.",
+  "version": "0.3.1",
+  "description": "Keep plugins, settings, hotkeys, snippets and appearance the same across many Obsidian vaults through one remote: a plain folder or a GitHub repository.",
   "main": "main.js",
   "private": true,
   "type": "module",

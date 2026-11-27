@@ -1,14 +1,15 @@
 /**
- * The one window of the plugin, in two panels: this vault on the left, the profile
+ * The one window of the plugin, in two panels: this vault on the left, the remote
  * on the right, and in the middle which way each item goes. Items are grouped
  * (Obsidian settings, core plugins, community plugins with their settings, ...)
- * and colored by how each side differs from the base. A row opens to show the
- * difference key by key; a JSON file can be merged there, key by key.
+ * and colored by how each side differs from the base. Any row opens to show the
+ * difference key by key or both versions whole, side by side; a JSON file can be
+ * merged there, key by key.
  */
 
 import { Modal, Notice, setIcon, type App } from "obsidian";
 import { defaultDirection, sideStates, type Change, type Direction, type SideState } from "../core/classify";
-import { itemDiff, lineDiff } from "../core/diff";
+import { itemDiff, lineDiff, sideBySide } from "../core/diff";
 import { buildTree, corePluginIds, type GroupId, type TreeGroup, type TreeRow } from "../core/groups";
 import { mergedChange, prepareMerge, rowId, type JsonMerge, type MergeSide } from "../core/merge";
 import { splitKey } from "../core/model";
@@ -20,6 +21,9 @@ import { t } from "./i18n";
 import { actionDetail, itemLabel, itemVersion, shortName } from "./labels";
 
 const ONLY_DIFF_KEY = "vault-profile-sync:only-diff";
+
+/** How an opened row shows the item: what differs, or both versions whole. */
+type View = "diff" | "file";
 
 const GROUP_TITLE: Record<GroupId, Parameters<typeof t>[0]> = {
 	obsidian: "gObsidian",
@@ -37,7 +41,6 @@ const STATE_TEXT: Record<SideState, Parameters<typeof t>[0] | null> = {
 	added: "stAdded",
 	removed: "stRemoved",
 	absent: "stAbsent",
-	differs: "stDiffers",
 };
 
 const DIRECTIONS: { dir: Direction; icon: string; label: Parameters<typeof t>[0] }[] = [
@@ -85,6 +88,7 @@ export class SyncModal extends Modal {
 	private picks = new Map<string, Map<string, MergeSide>>();
 	private loaded = new Map<string, Loaded | { error: string }>();
 	private expanded = new Set<string>();
+	private views = new Map<string, View>();
 	private groupOpen = new Map<GroupId, boolean>();
 	private onlyDiff = readOnlyDiff();
 
@@ -191,7 +195,7 @@ export class SyncModal extends Modal {
 		const colHead = grid.createDiv({ cls: "vps-trow vps-colhead" });
 		colHead.createDiv({ cls: "vps-cell vps-left", text: `${t("colVault")}: ${this.app.vault.getName()}` });
 		colHead.createDiv({ cls: "vps-cell vps-center" });
-		colHead.createDiv({ cls: "vps-cell vps-right", text: t("colProfile") });
+		colHead.createDiv({ cls: "vps-cell vps-right", text: t("colRemote") });
 
 		for (const group of this.tree()) this.group(grid, group);
 
@@ -294,8 +298,8 @@ export class SyncModal extends Modal {
 		}
 	}
 
-	private sideCell(cell: HTMLElement, key: string, item: Change["local"], state: SideState): void {
-		const name = cell.createSpan({ cls: `vps-name vps-st-${state}` });
+	private sideCell(cell: HTMLElement, key: string, item: Change["local"], state: SideState): HTMLElement {
+		const name = cell.createSpan({ cls: `vps-name vps-openable vps-st-${state}` });
 		name.setText(shortName(key));
 		const v = itemVersion(item);
 		if (v) name.createSpan({ cls: "vps-version", text: ` ${v}` });
@@ -303,6 +307,7 @@ export class SyncModal extends Modal {
 		const st = STATE_TEXT[state];
 		if (st) name.createSpan({ cls: "vps-state", text: ` (${t(st)})` });
 		name.setAttr("title", itemLabel(key));
+		return name;
 	}
 
 	private row(grid: HTMLElement, row: TreeRow, depth: number): void {
@@ -330,29 +335,29 @@ export class SyncModal extends Modal {
 
 		const states = sideStates(change);
 		const changed = differs(change);
+		const open = this.expanded.has(row.key);
+		const toggle = () => {
+			if (open) this.expanded.delete(row.key);
+			else {
+				this.expanded.add(row.key);
+				void this.ensureLoaded(change);
+			}
+			this.render();
+		};
+		const chev = left.createSpan({ cls: "vps-chevron", attr: { "aria-label": t("showContents") } });
+		setIcon(chev, open ? "chevron-down" : "chevron-right");
+		chev.addEventListener("click", toggle);
+		this.sideCell(left, row.key, change.local, states.local).addEventListener("click", toggle);
+		this.sideCell(right, row.key, change.remote, states.remote).addEventListener("click", toggle);
+
 		if (changed) {
-			const open = this.expanded.has(row.key);
-			const chev = left.createSpan({ cls: "vps-chevron clickable-icon", attr: { "aria-label": t("showDiff") } });
-			setIcon(chev, open ? "chevron-down" : "chevron-right");
-			chev.addEventListener("click", () => {
-				if (open) this.expanded.delete(row.key);
-				else {
-					this.expanded.add(row.key);
-					void this.ensureLoaded(change);
-				}
-				this.render();
-			});
-		} else left.createSpan({ cls: "vps-chevron-space" });
-		this.sideCell(left, row.key, change.local, states.local);
-		this.sideCell(right, row.key, change.remote, states.remote);
+			const dir = this.dir(change);
+			this.segmented(center, dir, canMerge(change), (d) => this.setDir(change, d));
+			const conflict = dir === "skip" && change.status === "conflict";
+			center.createDiv({ cls: `vps-action vps-action-${conflict ? "conflict" : dir}`, text: this.actionText(change, dir) });
+		}
 
-		if (!changed) return;
-		const dir = this.dir(change);
-		this.segmented(center, dir, canMerge(change), (d) => this.setDir(change, d));
-		const conflict = dir === "skip" && change.status === "conflict";
-		center.createDiv({ cls: `vps-action vps-action-${conflict ? "conflict" : dir}`, text: this.actionText(change, dir) });
-
-		if (this.expanded.has(row.key)) this.detail(grid, change);
+		if (open) this.detail(grid, change);
 	}
 
 	private actionText(change: Change, dir: Direction): string {
@@ -391,6 +396,41 @@ export class SyncModal extends Modal {
 			box.createDiv({ cls: "vps-error", text: l.error });
 			return;
 		}
+		const changed = differs(change);
+		const view: View = changed ? (this.views.get(change.key) ?? "diff") : "file";
+		if (changed) {
+			const tabs = box.createDiv({ cls: "vps-view-tabs" });
+			for (const [v, label] of [["diff", t("viewDiff")], ["file", t("viewFile")]] as const) {
+				const b = tabs.createEl("button", { cls: `vps-view-tab${v === view ? " is-active" : ""}`, text: label });
+				b.addEventListener("click", () => {
+					this.views.set(change.key, v);
+					this.render();
+				});
+			}
+		}
+		if (view === "file") this.wholeFile(box, l.local, l.remote);
+		else this.differences(box, change, l);
+	}
+
+	/** Both versions whole, line against line; the lines that differ are marked on both sides. */
+	private wholeFile(box: HTMLElement, local: string | undefined, remote: string | undefined): void {
+		const table = box.createDiv({ cls: "vps-file" });
+		const head = (title: string, text: string | undefined) => {
+			const h = table.createDiv({ cls: "vps-file-head", text: title });
+			if (text === undefined) h.createSpan({ cls: "vps-faint", text: ` (${t("stAbsent")})` });
+		};
+		head(t("colVault"), local);
+		head(t("colRemote"), remote);
+		for (const row of sideBySide(local ?? "", remote ?? "")) {
+			for (const line of [row.left, row.right]) {
+				const cls = line === undefined ? " vps-file-blank" : row.changed ? " is-changed" : "";
+				table.createDiv({ cls: `vps-file-line${cls}`, text: line ?? "" });
+			}
+		}
+	}
+
+	/** What differs: key by key for JSON (where a merge picks values), line by line for other text. */
+	private differences(box: HTMLElement, change: Change, l: Loaded): void {
 		const merging = this.dir(change) === "merge";
 		if (merging && !l.merge) box.createDiv({ cls: "vps-error", text: t("notJson") });
 
@@ -423,12 +463,12 @@ export class SyncModal extends Modal {
 			};
 			const links = bar.createSpan({ cls: "vps-bulk" });
 			links.createEl("a", { text: t("mergeAllVault") }).addEventListener("click", all("local"));
-			links.createEl("a", { text: t("mergeAllProfile") }).addEventListener("click", all("remote"));
+			links.createEl("a", { text: t("mergeAllRemote") }).addEventListener("click", all("remote"));
 		}
 		const table = box.createDiv({ cls: `vps-kv${canPick ? " is-merging" : ""}` });
 		table.createDiv({ cls: "vps-kv-head" });
 		table.createDiv({ cls: "vps-kv-head", text: t("colVault") });
-		table.createDiv({ cls: "vps-kv-head", text: t("colProfile") });
+		table.createDiv({ cls: "vps-kv-head", text: t("colRemote") });
 		for (const row of diff.rows) {
 			const id = rowId(row);
 			const pick = picks.get(id) ?? "local";

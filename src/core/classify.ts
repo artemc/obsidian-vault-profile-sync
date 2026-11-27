@@ -89,16 +89,16 @@ export function outgoingAction(c: Change): ChangeAction {
 
 /**
  * How one side of an item differs from the base, for the two-panel view.
- * `differs`: both sides have the item, they disagree and the base has never seen it
- * (a vault that has not synced yet), so it is unknown which one is newer.
+ * When both sides have the item, they disagree and the base has never seen it (a vault
+ * that has not synced yet), both are `edited`: it is unknown which one is newer.
  */
-export type SideState = "same" | "edited" | "added" | "removed" | "absent" | "differs";
+export type SideState = "same" | "edited" | "added" | "removed" | "absent";
 
 export function sideStates(c: Change): { local: SideState; remote: SideState } {
 	const l = c.local?.hash ?? null;
 	const r = c.remote?.hash ?? null;
 	if (l === r) return { local: "same", remote: "same" };
-	if (c.base === null && l !== null && r !== null) return { local: "differs", remote: "differs" };
+	if (c.base === null && l !== null && r !== null) return { local: "edited", remote: "edited" };
 	const one = (h: string | null): SideState => {
 		if (h === c.base) return h === null ? "absent" : "same";
 		if (h === null) return "removed";

@@ -70,7 +70,7 @@ export function actionDetail(change: Change, dir: Direction): string {
 		return extra ? `${action}: ${extra}` : action;
 	}
 	if (dir === "push") {
-		const action = !local ? t("doRemoveProfile") : !remote ? t("doAddProfile") : t("doReplaceProfile");
+		const action = !local ? t("doRemoveRemote") : !remote ? t("doAddRemote") : t("doReplaceRemote");
 		const extra = isEntry ? entryDetail(remote, local) : "";
 		return extra ? `${action}: ${extra}` : action;
 	}

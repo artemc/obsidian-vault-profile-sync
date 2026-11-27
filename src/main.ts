@@ -1,5 +1,5 @@
 /**
- * Vault Profile Sync: one settings profile in a GitHub repository or a folder, shared by many vaults.
+ * Vault Profile Sync: one setup in a remote (a folder or a GitHub repository), shared by many vaults.
  * This file wires the engine to Obsidian: stored settings and base, token,
  * commands, ribbon, status bar and the background check.
  */
@@ -69,7 +69,7 @@ export default class VaultProfileSync extends Plugin {
 			console.warn("[vault-profile-sync] could not move the token to the shared copy", e);
 		}
 		this.addSettingTab(new ProfileSettingTab(this.app, this));
-		this.addRibbonIcon("folder-sync", t("openProfile"), () => this.openModal());
+		this.addRibbonIcon("folder-sync", t("openSync"), () => this.openModal());
 		this.statusEl = this.addStatusBarItem();
 		this.statusEl.addClass("mod-clickable", "vps-status");
 		this.statusEl.onClickEvent(() => this.openModal());
@@ -79,7 +79,7 @@ export default class VaultProfileSync extends Plugin {
 			if (e.key === MACHINE_TOKEN_KEY) this.setStatusText();
 		});
 
-		this.addCommand({ id: "open", name: t("openProfile"), callback: () => this.openModal() });
+		this.addCommand({ id: "open", name: t("openSync"), callback: () => this.openModal() });
 		this.addCommand({ id: "undo-last-pull", name: t("commandUndo"), callback: () => void this.undoLastPull() });
 
 		this.app.workspace.onLayoutReady(() => {
@@ -328,12 +328,12 @@ export default class VaultProfileSync extends Plugin {
 		let text = override;
 		if (!text) {
 			if (!this.isConfigured()) text = t("statusNotConfigured");
-			else if (!this.lastStatus) text = t("profile");
+			else if (!this.lastStatus) text = t("remote");
 			else {
 				const { incoming, outgoing, conflicts } = this.lastStatus.result;
 				if (incoming.length + outgoing.length + conflicts.length === 0) text = t("statusInSync");
 				else {
-					const parts = [`${t("profile")}:`];
+					const parts = [`${t("remote")}:`];
 					if (incoming.length) parts.push(`↓${incoming.length}`);
 					if (outgoing.length) parts.push(`↑${outgoing.length}`);
 					if (conflicts.length) parts.push(`⚠${conflicts.length}`);

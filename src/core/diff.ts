@@ -87,3 +87,35 @@ export function itemDiff(before: string | undefined, after: string | undefined):
 	if (jsonA && jsonB && (a !== undefined || b !== undefined)) return { kind: "json", rows: jsonDiff(a, b) };
 	return { kind: "text", rows: lineDiff(before ?? "", after ?? "") };
 }
+
+export interface SideBySideRow {
+	/** Line of the left text, or undefined where only the right one has a line. */
+	left?: string;
+	right?: string;
+	changed: boolean;
+}
+
+/** Both texts whole, line against line, for viewing two versions next to each other. */
+export function sideBySide(left: string, right: string): SideBySideRow[] {
+	const rows: SideBySideRow[] = [];
+	let onlyLeft: string[] = [];
+	let onlyRight: string[] = [];
+	const flush = () => {
+		for (let i = 0; i < Math.max(onlyLeft.length, onlyRight.length); i++) {
+			rows.push({ left: onlyLeft[i], right: onlyRight[i], changed: true });
+		}
+		onlyLeft = [];
+		onlyRight = [];
+	};
+	const split = (v: string) => (v === "" ? [] : v.replace(/\n$/, "").split("\n"));
+	for (const part of diffLines(left, right)) {
+		if (part.removed) onlyLeft.push(...split(part.value));
+		else if (part.added) onlyRight.push(...split(part.value));
+		else {
+			flush();
+			for (const line of split(part.value)) rows.push({ left: line, right: line, changed: false });
+		}
+	}
+	flush();
+	return rows;
+}

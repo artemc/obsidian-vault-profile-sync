@@ -3,7 +3,7 @@ import { canonicalJson, gitBlobSha, type Json } from "../src/core/canonical";
 import { classify, classifyOne, defaultDirection, sideStates, type Change } from "../src/core/classify";
 import { buildTree, corePluginIds, groupOf } from "../src/core/groups";
 import { mergedChange, mergeJson, prepareMerge, rowId } from "../src/core/merge";
-import { itemDiff, jsonDiff } from "../src/core/diff";
+import { itemDiff, jsonDiff, sideBySide } from "../src/core/diff";
 import { ExcludeRules, parsePatternList } from "../src/core/exclude";
 import { emptySettings, fileItem, parseProfile, repoPathToItem, itemRepoPath, settingsText, type Snapshot } from "../src/core/model";
 import { asInstalledByObsidian } from "../src/engine/catalog";
@@ -174,6 +174,16 @@ describe("diff", () => {
 		expect(d.kind).toBe("text");
 		expect(d.rows.map((r) => r.type)).toEqual(["removed", "added"]);
 	});
+	it("lines up two whole texts side by side", () => {
+		expect(sideBySide("a\nb\nc\n", "a\nB\nB2\nc\n")).toEqual([
+			{ left: "a", right: "a", changed: false },
+			{ left: "b", right: "B", changed: true },
+			{ left: undefined, right: "B2", changed: true },
+			{ left: "c", right: "c", changed: false },
+		]);
+		expect(sideBySide("", "x\n")).toEqual([{ left: undefined, right: "x", changed: true }]);
+		expect(sideBySide("same\n", "same\n")).toEqual([{ left: "same", right: "same", changed: false }]);
+	});
 });
 
 describe("install like Obsidian", () => {
@@ -204,7 +214,7 @@ describe("two-panel view", () => {
 		expect(sideStates(change(null, "1", "1"))).toEqual({ local: "removed", remote: "same" });
 		expect(sideStates(change("2", null, "1"))).toEqual({ local: "edited", remote: "removed" });
 		// never synced: which one is newer is unknown
-		expect(sideStates(change("1", "2", null))).toEqual({ local: "differs", remote: "differs" });
+		expect(sideStates(change("1", "2", null))).toEqual({ local: "edited", remote: "edited" });
 	});
 
 	it("proposes the direction of the status", () => {

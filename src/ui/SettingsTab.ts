@@ -70,7 +70,7 @@ export class ProfileSettingTab extends PluginSettingTab {
 				.setDesc(t("sPathDesc"))
 				.addText((c) =>
 					c
-						.setPlaceholder("/Users/me/Dropbox/obsidian-profile")
+						.setPlaceholder("/Users/me/Dropbox/obsidian-settings")
 						.setValue(data.path)
 						.onChange(async (v) => {
 							data.path = v.trim();
@@ -87,7 +87,7 @@ export class ProfileSettingTab extends PluginSettingTab {
 			.setDesc(t("sRepoDesc"))
 			.addText((c) =>
 				c
-					.setPlaceholder("owner/obsidian-profile")
+					.setPlaceholder("owner/obsidian-settings")
 					.setValue(data.repo)
 					.onChange(async (v) => {
 						data.repo = v.trim();
