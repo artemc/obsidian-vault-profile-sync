@@ -86,3 +86,37 @@ export function outgoingAction(c: Change): ChangeAction {
 	if (!c.remote) return "add";
 	return "modify";
 }
+
+/**
+ * How one side of an item differs from the base, for the two-panel view.
+ * `differs`: both sides have the item, they disagree and the base has never seen it
+ * (a vault that has not synced yet), so it is unknown which one is newer.
+ */
+export type SideState = "same" | "edited" | "added" | "removed" | "absent" | "differs";
+
+export function sideStates(c: Change): { local: SideState; remote: SideState } {
+	const l = c.local?.hash ?? null;
+	const r = c.remote?.hash ?? null;
+	if (l === r) return { local: "same", remote: "same" };
+	if (c.base === null && l !== null && r !== null) return { local: "differs", remote: "differs" };
+	const one = (h: string | null): SideState => {
+		if (h === c.base) return h === null ? "absent" : "same";
+		if (h === null) return "removed";
+		return c.base === null ? "added" : "edited";
+	};
+	return { local: one(l), remote: one(r) };
+}
+
+/** Which way an item travels: into this vault, into the profile, merged into both, or not at all. */
+export type Direction = "pull" | "push" | "merge" | "skip";
+
+export function defaultDirection(c: Change): Direction {
+	switch (c.status) {
+		case "incoming":
+			return "pull";
+		case "outgoing":
+			return "push";
+		default:
+			return "skip";
+	}
+}

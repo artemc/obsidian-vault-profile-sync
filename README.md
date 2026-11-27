@@ -105,14 +105,33 @@ vault has the same plugins, settings, hotkeys and snippets.
 
 ## Everyday use
 
-Open the profile window. It lists:
+Open the profile window. It has two panels, like a file manager: **this vault** on the
+left, **the profile** on the right, and in the middle which way each item goes. Items
+are grouped: Obsidian settings, core plugins, community plugins (each with its settings
+nested under it), CSS snippets, themes, other files and the profile's sync settings.
+*Other files* are JSON files in the root of `.obsidian` that are not Obsidian's own:
+some plugin writes them there, and which one cannot be known.
 
-- **Incoming** - changed in the profile; **Pull** applies them and reloads Obsidian.
-- **Outgoing** - changed in this vault; **Push** sends them as one commit.
-- **Conflicts** - changed on both sides; pick *Keep mine* or *Take profile* for each.
+Each side is colored by how it changed since this vault last synced: **edited**
+(orange), **new** (green), **removed** (red), **absent** (grey). A vault that has
+never synced cannot tell which side is newer, so both are marked **differs**.
 
-Each row has a **Diff** button (JSON is compared key by key, CSS line by line) and an
-eye button that excludes the item in this vault. **Sync all** pushes and then pulls.
+For every item pick a direction:
+
+- `←` take the profile's version into this vault (also reverts a change made here);
+- `→` send this vault's version to the profile (also reverts a change that came from
+  another vault, or removes from the profile a plugin you do not want);
+- `−` leave both as they are;
+- `⇄` merge a JSON file key by key: open the row, click the value to keep on each line,
+  and both this vault and the profile get the result.
+
+The direction a change came from is preselected; conflicts start at `−`. Open a row to
+see the difference (JSON key by key, CSS line by line). **Apply** pushes first, then
+pulls, and reloads Obsidian if anything came into the vault. *Only differences* hides
+items that are in sync.
+
+The lock button excludes an item in this vault only; it stays in place, greyed, so it
+can be unlocked from the same window.
 
 If the profile changes on GitHub while you are reviewing, the push is refused and the
 comparison is shown again. A push never overwrites what it has not shown you.
@@ -127,8 +146,9 @@ Patterns, one per line:
 - `config:<file>.json`, `snippet:<name>`, `theme:<name>`;
 - a bare name matches every kind; `*` matches anything.
 
-The eye button in the profile window excludes an item in this vault only. Excluded
-items stay listed at the bottom of the window; press the eye again to sync them.
+The lock button in the profile window excludes one item in this vault only; the item
+stays in its place in the window, and pressing the lock again syncs it. Patterns from the
+settings are listed at the bottom of the window.
 
 *This vault only* exclusions keep a plugin local: it is neither pushed nor removed by a
 pull. *Shared* exclusions, extra secret keys and fields that are not secret travel with

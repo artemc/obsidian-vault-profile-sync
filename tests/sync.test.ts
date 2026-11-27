@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import type { Change } from "../src/core/classify";
+import { mergedChange, prepareMerge, rowId } from "../src/core/merge";
 import { emptySettings } from "../src/core/model";
 import { SECRET_MARKER } from "../src/core/secrets";
 import { BackupStore } from "../src/engine/backup";
 import { Catalog } from "../src/engine/catalog";
-import { SyncEngine } from "../src/engine/sync";
+import { SyncEngine, type SyncStatus } from "../src/engine/sync";
 import { GitHubClient, RemoteMovedError } from "../src/remote/github";
 import { GitHubStore } from "../src/remote/store";
 import { browserCache } from "./fakes/httpcache";
@@ -434,5 +436,94 @@ describe("updates and undo", () => {
 		expect(b.fs.json(`${CFG}/community-plugins.json`)).toEqual([]);
 		expect(b.fs.text(`${CFG}/snippets/wide.css`)).toBeUndefined();
 		expect(await store.list()).toHaveLength(0);
+	});
+});
+
+/** What the window's Apply does (main.syncAll): push first, then pull on top of the pushed base. */
+async function apply(v: Vault, s: SyncStatus, push: Change[], pull: Change[]): Promise<void> {
+	let base = s.result.settledBase;
+	if (push.length > 0) base = (await v.engine().push(s, push, base)).base;
+	if (pull.length > 0) {
+		const r = await v.engine().pull(s, pull, base);
+		expect(r.failed).toEqual([]);
+		base = r.base;
+		if (r.shared) v.shared = r.shared;
+	}
+	v.base = base;
+}
+
+function pick(s: SyncStatus, key: string): Change {
+	const c = [...s.result.incoming, ...s.result.outgoing, ...s.result.conflicts].find((x) => x.key === key);
+	if (!c) throw new Error(`${key} is not a change`);
+	return c;
+}
+
+describe("two-panel window: any direction for any change", () => {
+	it("reverts a change made in this vault by taking the profile's version", async () => {
+		await a.push();
+		a.fs.put(`${CFG}/app.json`, JSON.stringify({ spellcheck: true }));
+		const s = await a.status();
+		expect(s.result.outgoing.map((c) => c.key)).toEqual(["config:app.json"]);
+		await apply(a, s, [], [pick(s, "config:app.json")]);
+		expect(a.fs.json(`${CFG}/app.json`)).toEqual({});
+		expect(await a.counts()).toEqual(inSync);
+	});
+
+	it("reverts a change made in the profile by sending this vault's version", async () => {
+		await a.push();
+		const b = await freshVault("B");
+		b.fs.put(`${CFG}/hotkeys.json`, "{}");
+		await b.push();
+		const s = await a.status();
+		await apply(a, s, [pick(s, "config:hotkeys.json")], []);
+		expect(await a.counts()).toEqual(inSync);
+		expect(JSON.parse(gh.snapshot().get("config/hotkeys.json")!)).toEqual({ "editor:toggle-bold": [{ modifiers: ["Mod"], key: "B" }] });
+		expect((await b.counts()).incoming).toEqual(["config:hotkeys.json"]);
+	});
+
+	it("removes a plugin another vault added from the profile instead of installing it", async () => {
+		await a.push();
+		const b = await freshVault("B");
+		gh.release("calendar", "1.0.0");
+		b.installPlugin("calendar", "1.0.0", { weekStart: 1 });
+		await b.push();
+		const s = await a.status();
+		expect(s.result.incoming.map((c) => c.key)).toEqual(["plugin-data:calendar", "plugin:calendar"]);
+		await apply(a, s, s.result.incoming, []);
+		expect(a.plugins()).not.toContain("calendar");
+		expect(gh.snapshot().has("plugins/calendar/data.json")).toBe(false);
+		expect(await a.counts()).toEqual(inSync);
+		const cb = await b.counts();
+		expect(cb.incoming.sort()).toEqual(["plugin-data:calendar", "plugin:calendar"]);
+	});
+
+	it("merges a conflict key by key into both sides without sending the secret", async () => {
+		await a.push();
+		const b = await freshVault("B");
+		a.fs.put(`${CFG}/plugins/templater/data.json`, JSON.stringify({ templates_folder: "A-templates", openai_api_key: "sk-secret-A", trigger: "a" }));
+		await a.push();
+		b.fs.put(`${CFG}/plugins/templater/data.json`, JSON.stringify({ templates_folder: "Templates", openai_api_key: "sk-secret-B", trigger: "b", onlyB: 1 }));
+		const s = await b.status();
+		const conflict = pick(s, "plugin-data:templater");
+		expect(conflict.status).toBe("conflict");
+
+		const engine = b.engine();
+		const m = prepareMerge(await engine.sideText(s, conflict, "local"), await engine.sideText(s, conflict, "remote"))!;
+		expect(m.rows.map((r) => r.path)).toEqual(["onlyB", "templates_folder", "trigger"]);
+		// the profile's folder, this vault's trigger and extra key
+		const picks = new Map([[rowId(m.rows[1]), "remote" as const]]);
+		const merged = await mergedChange(conflict, m, picks);
+		expect([merged.pull, merged.push]).toEqual([true, true]);
+		await apply(b, s, [merged.change], [merged.change]);
+
+		const want = { templates_folder: "A-templates", trigger: "b", onlyB: 1 };
+		expect(b.fs.json(`${CFG}/plugins/templater/data.json`)).toEqual({ ...want, openai_api_key: "sk-secret-B" });
+		const inProfile = gh.snapshot().get("plugins/templater/data.json")!;
+		expect(inProfile).not.toContain("sk-secret");
+		expect(JSON.parse(inProfile)).toMatchObject(want);
+		expect(await b.counts()).toEqual(inSync);
+		expect((await a.counts()).incoming).toEqual(["plugin-data:templater"]);
+		await a.pull();
+		expect(a.fs.json(`${CFG}/plugins/templater/data.json`)).toEqual({ ...want, openai_api_key: "sk-secret-A" });
 	});
 });

@@ -186,7 +186,8 @@ export class SyncEngine {
 				if (await fs.exists(path)) prepared.ops.push({ type: "delete", path });
 				return prepared;
 			}
-			let text = await this.reader.text(status.remote, itemRepoPath(kind, name)!);
+			// A merged change carries its text; otherwise it is read from the profile.
+			let text = remote.text ?? (await this.reader.text(status.remote, itemRepoPath(kind, name)!));
 			if (JSON_KINDS.includes(kind)) {
 				const incoming = tryParseJson(text);
 				if (incoming !== undefined) {

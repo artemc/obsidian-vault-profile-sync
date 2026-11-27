@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { canonicalJson, gitBlobSha, type Json } from "../src/core/canonical";
-import { classify, classifyOne } from "../src/core/classify";
+import { classify, classifyOne, defaultDirection, sideStates, type Change } from "../src/core/classify";
+import { buildTree, corePluginIds, groupOf } from "../src/core/groups";
+import { mergedChange, mergeJson, prepareMerge, rowId } from "../src/core/merge";
 import { itemDiff, jsonDiff } from "../src/core/diff";
 import { ExcludeRules, parsePatternList } from "../src/core/exclude";
 import { emptySettings, fileItem, parseProfile, repoPathToItem, itemRepoPath, settingsText, type Snapshot } from "../src/core/model";
@@ -163,8 +165,8 @@ describe("model", () => {
 describe("diff", () => {
 	it("diffs JSON by key path", () => {
 		expect(jsonDiff({ a: 1, b: { c: 2 } }, { a: 1, b: { c: 3 }, d: true })).toEqual([
-			{ path: "b.c", type: "changed", before: "2", after: "3" },
-			{ path: "d", type: "added", after: "true" },
+			{ path: "b.c", segments: ["b", "c"], type: "changed", before: "2", after: "3" },
+			{ path: "d", segments: ["d"], type: "added", after: "true" },
 		]);
 	});
 	it("diffs CSS by line", () => {
@@ -179,5 +181,77 @@ describe("install like Obsidian", () => {
 		expect(asInstalledByObsidian("a();\n")).toBe("a();\n\n/* nosourcemap */");
 		expect(asInstalledByObsidian("a();\n//# sourceMappingURL=data:application/json;base64,AAA=\n")).toBe("a();\n\n\n/* nosourcemap */");
 		expect(asInstalledByObsidian("a();\n\n/* nosourcemap */")).toBe("a();\n\n/* nosourcemap */");
+	});
+});
+
+describe("two-panel view", () => {
+	const item = (hash: string | null) => (hash === null ? null : { key: "config:x.json", kind: "config" as const, name: "x.json", hash });
+	const change = (l: string | null, r: string | null, b: string | null): Change => ({
+		key: "config:x.json",
+		status: classifyOne(l, r, b),
+		local: item(l),
+		remote: item(r),
+		base: b,
+	});
+
+	it("tells how each side differs from the base", () => {
+		expect(sideStates(change("1", "1", "1"))).toEqual({ local: "same", remote: "same" });
+		expect(sideStates(change("2", "1", "1"))).toEqual({ local: "edited", remote: "same" });
+		expect(sideStates(change("1", "2", "1"))).toEqual({ local: "same", remote: "edited" });
+		expect(sideStates(change("2", "3", "1"))).toEqual({ local: "edited", remote: "edited" });
+		expect(sideStates(change(null, "1", null))).toEqual({ local: "absent", remote: "added" });
+		expect(sideStates(change("1", null, null))).toEqual({ local: "added", remote: "absent" });
+		expect(sideStates(change(null, "1", "1"))).toEqual({ local: "removed", remote: "same" });
+		expect(sideStates(change("2", null, "1"))).toEqual({ local: "edited", remote: "removed" });
+		// never synced: which one is newer is unknown
+		expect(sideStates(change("1", "2", null))).toEqual({ local: "differs", remote: "differs" });
+	});
+
+	it("proposes the direction of the status", () => {
+		expect(defaultDirection(change("1", "2", "1"))).toBe("pull");
+		expect(defaultDirection(change("2", "1", "1"))).toBe("push");
+		expect(defaultDirection(change("2", "3", "1"))).toBe("skip");
+	});
+
+	it("groups Obsidian settings, core plugins, community plugins and unknown files", () => {
+		const core = corePluginIds('{"switcher": true, "my-new-core": false}');
+		expect(groupOf("config:app.json", core)).toBe("obsidian");
+		expect(groupOf("config:types.json", core)).toBe("obsidian");
+		expect(groupOf("config:switcher.json", core)).toBe("core");
+		expect(groupOf("config:my-new-core.json", core)).toBe("core");
+		expect(groupOf("config:canvas.json", corePluginIds()), "known without core-plugins.json").toBe("core");
+		expect(groupOf("config:community-plugins-settings.json", core)).toBe("other");
+		expect(groupOf("plugin-data:dataview", core)).toBe("community");
+		expect(groupOf("settings:sync", core)).toBe("sync");
+	});
+
+	it("nests plugin settings under the plugin and keeps excluded items in place", () => {
+		const c = (key: string): Change => ({ key, status: "same", local: null, remote: null, base: null });
+		const tree = buildTree([c("plugin:dataview"), c("plugin-data:dataview"), c("config:app.json"), c("config:vault-setup.json")], ["plugin:local-only"], corePluginIds());
+		expect(tree.map((g) => g.id)).toEqual(["obsidian", "community", "other"]);
+		const community = tree.find((g) => g.id === "community")!;
+		expect(community.rows.map((r) => [r.key, r.change === null, r.children.map((x) => x.key)])).toEqual([
+			["plugin:dataview", false, ["plugin-data:dataview"]],
+			["plugin:local-only", true, []],
+		]);
+	});
+
+	it("merges key by key, with dots in key names and removed keys", async () => {
+		const local = canonicalJson({ menus: { "dom:div.a": { order: [1] }, keep: 1 }, onlyLocal: true, x: 1 });
+		const remote = canonicalJson({ menus: { "dom:div.a": { order: [2] }, keep: 1 }, onlyRemote: "r", x: 2 });
+		const m = prepareMerge(local, remote)!;
+		expect(m.rows.map((r) => r.segments)).toEqual([["menus", "dom:div.a", "order"], ["onlyLocal"], ["onlyRemote"], ["x"]]);
+		const pick = (paths: string[][]) => new Map(m.rows.filter((r) => paths.some((p) => JSON.stringify(p) === rowId(r))).map((r) => [rowId(r), "remote" as const]));
+
+		expect(mergeJson(m, new Map())).toBe(local);
+		const merged = JSON.parse(mergeJson(m, pick([["menus", "dom:div.a", "order"], ["onlyLocal"], ["onlyRemote"]])));
+		expect(merged).toEqual({ menus: { "dom:div.a": { order: [2] }, keep: 1 }, onlyRemote: "r", x: 1 });
+
+		const all = await mergedChange({ key: "config:x.json", status: "conflict", local: null, remote: null, base: "b" }, m, pick(m.rows.map((r) => r.segments)));
+		expect(all.change.local!.text).toBe(remote);
+		expect([all.pull, all.push]).toEqual([true, false]);
+		const mine = await mergedChange({ key: "config:x.json", status: "conflict", local: null, remote: null, base: "b" }, m, new Map());
+		expect([mine.pull, mine.push]).toEqual([false, true]);
+		expect(prepareMerge(".a{}", remote)).toBeNull();
 	});
 });
