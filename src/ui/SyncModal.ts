@@ -61,6 +61,14 @@ function differs(c: Change | null): c is Change {
 	return !!c && c.status !== "same";
 }
 
+/** What each item's choices were made against: both sides and the base. */
+function fingerprints(status: SyncStatus): Map<string, string> {
+	const { incoming, outgoing, conflicts, same } = status.result;
+	return new Map(
+		[...incoming, ...outgoing, ...conflicts, ...same].map((c) => [c.key, `${c.local?.hash ?? "-"}|${c.remote?.hash ?? "-"}|${c.base ?? "-"}`]),
+	);
+}
+
 function canMerge(c: Change): boolean {
 	const { kind } = splitKey(c.key);
 	return (kind === "config" || kind === "plugin-data") && !!c.local && !!c.remote && c.status !== "same";
@@ -114,7 +122,13 @@ export class SyncModal extends Modal {
 		this.contentEl.createDiv({ cls, text });
 	}
 
-	private async load(): Promise<void> {
+	/**
+	 * Compares again. With `keep`, everything chosen so far (direction, merge picks,
+	 * opened rows) survives for each item whose both sides and base are as they
+	 * were, and the window is not blanked, so it stays where it was scrolled: a lock
+	 * clicked in the middle of the list must not throw the choices above it away.
+	 */
+	private async load(keep = false): Promise<void> {
 		if (!this.plugin.isConfigured()) {
 			this.message(t("notConfigured"));
 			const btn = this.contentEl.createEl("button", { text: t("openSettings"), cls: "mod-cta" });
@@ -126,7 +140,8 @@ export class SyncModal extends Modal {
 			});
 			return;
 		}
-		this.message(t("loading"));
+		const before = keep && this.status ? fingerprints(this.status) : null;
+		if (!before) this.message(t("loading"));
 		try {
 			this.status = await this.plugin.compare();
 		} catch (e) {
@@ -134,10 +149,11 @@ export class SyncModal extends Modal {
 			this.contentEl.createEl("button", { text: t("retry") }).addEventListener("click", () => void this.load());
 			return;
 		}
-		this.dirs = new Map(this.differing().map((c) => [c.key, defaultDirection(c)]));
-		this.picks.clear();
-		this.loaded.clear();
-		this.expanded.clear();
+		const now = fingerprints(this.status);
+		const kept = (k: string) => !!before && before.get(k) === now.get(k);
+		this.dirs = new Map(this.differing().map((c) => [c.key, kept(c.key) ? (this.dirs.get(c.key) ?? defaultDirection(c)) : defaultDirection(c)]));
+		for (const m of [this.picks, this.loaded, this.views]) for (const k of [...m.keys()]) if (!kept(k)) m.delete(k);
+		for (const k of [...this.expanded]) if (!kept(k)) this.expanded.delete(k);
 		this.render();
 	}
 
@@ -512,13 +528,13 @@ export class SyncModal extends Modal {
 	private async excludeHere(key: string): Promise<void> {
 		if (!this.plugin.data.localExclude.includes(key)) this.plugin.data.localExclude.push(key);
 		await this.plugin.saveSettings();
-		await this.load();
+		await this.load(true);
 	}
 
 	private async includeHere(key: string): Promise<void> {
 		this.plugin.data.localExclude = this.plugin.data.localExclude.filter((k) => k !== key);
 		await this.plugin.saveSettings();
-		await this.load();
+		await this.load(true);
 	}
 
 	// ------------------------------------------------------------ apply
@@ -607,7 +623,7 @@ export class SyncModal extends Modal {
 		} catch (e) {
 			if (e instanceof RemoteMovedError) {
 				new Notice(t("remoteMoved"));
-				await this.load();
+				await this.load(true);
 				return;
 			}
 			this.message(e instanceof Error ? e.message : String(e), "vps-error");

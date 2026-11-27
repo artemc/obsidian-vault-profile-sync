@@ -130,7 +130,15 @@ export class SyncEngine {
 			secrets: this.matcher(this.cfg.shared, remoteSettings),
 			shared: this.cfg.shared,
 		});
-		return { local, remote, result: classify(local.snapshot, remote.snapshot, base) };
+		// An excluded item is missing on both sides, which by itself reads as "agreed,
+		// gone" and would drop its base: after unlocking, a change coming from the
+		// remote would show as a conflict. Its base is kept aside and handed back.
+		const kept: Base = {};
+		const compared: Base = {};
+		for (const [key, hash] of Object.entries(base)) (rules.isExcluded(key) ? kept : compared)[key] = hash;
+		const result = classify(local.snapshot, remote.snapshot, compared);
+		result.settledBase = { ...result.settledBase, ...kept };
+		return { local, remote, result };
 	}
 
 	/** Text of one side of a change for the diff view; undefined if absent. */

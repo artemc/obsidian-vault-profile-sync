@@ -225,6 +225,22 @@ describe("exclusions", () => {
 		expect(b.plugins()).toContain("local-thing");
 	});
 
+	it("locking an item and unlocking it again keeps its base", async () => {
+		await a.push();
+		const b = await freshVault("B");
+		a.fs.put(`${CFG}/hotkeys.json`, "{}");
+		await a.push();
+		expect(await b.counts()).toEqual({ incoming: ["config:hotkeys.json"], outgoing: [], conflicts: [] });
+		// the window stores the settled base after every compare, as the plugin does
+		b.localExclude.push("config:hotkeys.json");
+		b.base = (await b.status()).result.settledBase;
+		expect(b.base["config:hotkeys.json"]).toBeDefined();
+		b.localExclude.length = 0;
+		b.base = (await b.status()).result.settledBase;
+		// still a change coming from the remote, not a conflict without a base
+		expect(await b.counts()).toEqual({ incoming: ["config:hotkeys.json"], outgoing: [], conflicts: [] });
+	});
+
 	it("shared exclusions travel with the profile", async () => {
 		a.shared = { exclude: ["config:graph.json"], secretKeys: ["templates_folder"], plainKeys: [] };
 		a.fs.put(`${CFG}/graph.json`, "{}");

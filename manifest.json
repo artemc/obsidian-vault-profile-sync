@@ -1,7 +1,7 @@
 {
   "id": "vault-profile-sync",
   "name": "Vault Profile Sync",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "minAppVersion": "1.11.4",
   "description": "Keep plugins, plugin settings, hotkeys, snippets, themes and Obsidian settings the same in many vaults through one remote: a plain folder or a GitHub repository.",
   "author": "artemc",
